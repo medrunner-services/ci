@@ -13,6 +13,3 @@ jobs:
     with:
       dotnet-version: 10.0.x
       target: tests/fixtures/mock-projects/dotnet/Mock.Container.App.Tests/Mock.Container.App.Tests.csproj
-      postgres-enabled: true
-      postgres-image: postgres:17.4
-      postgres-host-port: 55432

@@ -6,7 +6,7 @@ The `v1` major tag is released by this repository's own `release.yml` workflow.
 
 | Workflow | Purpose | Inputs | Secrets | Outputs | Job Permissions | Environment | Side Effects | Consumer Reference |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `wf-test-dotnet.yml` | Restore, build, and test a .NET target, optionally with PostgreSQL. | Runner selectors, `target`, SDK version, configuration, locked mode, PostgreSQL options, and timeout. | None. | None. | `contents: read`. | None. | Runs caller tests only. | `medrunner-services/ci/.github/workflows/wf-test-dotnet.yml@v1` |
+| `wf-test-dotnet.yml` | Restore, build, and test a .NET target. | Runner selectors, `target`, SDK version, configuration, locked mode, and timeout. | None. | None. | `contents: read`. | None. | Runs caller tests only. | `medrunner-services/ci/.github/workflows/wf-test-dotnet.yml@v1` |
 | `wf-test-node.yml` | Install, build, lint, format-check, and test a Node project. | Runner selectors, Node version, working directory, npm scope, private package flag, script flags, and timeout. | None. | None. | `contents: read`, `packages: read`. | None. | Reads private GitHub Packages only when requested. | `medrunner-services/ci/.github/workflows/wf-test-node.yml@v1` |
 | `wf-verify-container.yml` | Build a Dockerfile without publishing it. | Runner selectors, context, Dockerfile, and timeout. | Optional `NODE_AUTH_TOKEN`. | None. | `contents: read`, `packages: read`. | None. | Builds through BuildKit with `push: false`. | `medrunner-services/ci/.github/workflows/wf-verify-container.yml@v1` |
 | `wf-release-semantic.yml` | Create tag-only semantic releases and conditionally backpropagate stable history. | Runner selectors, `environment-name`, semantic-release version, branches, and backpropagation options. | Optional `PR_AUTOMATION_PAT`. | `release-published`, `new-version`, `new-tag`, `new-channel`, `backprop-pr-url`, `backprop-pr-number`. | `contents: write`, `issues: write`, `pull-requests: write`. | `release` by default, override with `environment-name`. | Creates Git tags and GitHub releases, and may create, approve, or auto-merge a stable-to-main PR. | `medrunner-services/ci/.github/workflows/wf-release-semantic.yml@v1` |
@@ -66,7 +66,7 @@ RUN dotnet publish "MedrunnerApi.csproj" -c Release -p:Version="$VERSION" -o /ap
 
 ## Local verification boundary
 
-The local fixture suite validates workflow syntax, test behavior, PostgreSQL service wiring, and public and private Dockerfile builds.
+The local fixture suite validates workflow syntax, test behavior, and public and private Dockerfile builds.
 
 It does not execute semantic release, protected environment gates, GitHub release or pull-request writes, auto-merge, or external package publication.
 

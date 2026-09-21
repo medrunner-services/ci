@@ -34,8 +34,6 @@ jobs:
       target: MedrunnerApi.sln
       dotnet-version: 10.0.x
       locked-mode: false
-      postgres-enabled: true
-      postgres-image: postgres:17.4
 
   verify-container:
     needs: test

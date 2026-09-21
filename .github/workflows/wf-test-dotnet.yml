@@ -37,21 +37,6 @@ on:
         required: false
         type: boolean
         default: false
-      postgres-enabled:
-        description: Runs the test job with a PostgreSQL service container.
-        required: false
-        type: boolean
-        default: false
-      postgres-image:
-        description: PostgreSQL image used when postgres-enabled is true.
-        required: false
-        type: string
-        default: postgres:17.4
-      postgres-host-port:
-        description: Host port mapped to PostgreSQL's container port 5432.
-        required: false
-        type: number
-        default: 5432
       timeout-minutes:
         description: Per-job timeout.
         required: false
@@ -62,7 +47,6 @@ permissions: {}
 
 jobs:
   test:
-    if: ${{ !inputs.postgres-enabled }}
     name: ${{ inputs.target }}
     runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -128,94 +112,4 @@ jobs:
         run: dotnet build "${{ inputs.target }}" --configuration "${{ inputs.configuration }}" --no-restore
 
       - name: Test
-        run: dotnet test "${{ inputs.target }}" --configuration "${{ inputs.configuration }}" --no-build
-
-  test-postgres:
-    if: ${{ inputs.postgres-enabled }}
-    name: ${{ inputs.target }} + PostgreSQL
-    runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
-    timeout-minutes: ${{ inputs.timeout-minutes }}
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: ${{ inputs.postgres-image }}
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: medrunner-test
-        options: >-
-          --health-cmd "pg_isready -U postgres -d medrunner-test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - "${{ inputs.postgres-host-port }}:5432"
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - name: Checkout caller
-        uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: ${{ inputs.dotnet-version }}
-
-      - name: Validate inputs
-        env:
-          TARGET: ${{ inputs.target }}
-        run: |
-          case "$TARGET" in
-            ""|/*|*".."*)
-              echo "target must be a repository-relative path without '..'." >&2
-              exit 2
-              ;;
-          esac
-          test -f "$TARGET"
-
-      - name: Record runner contract
-        env:
-          RUNS_ON_SELF_HOSTED: ${{ inputs.runs-on-self-hosted }}
-          RUNS_ON_JSON: ${{ inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest')) }}
-        run: |
-          {
-            echo "## .NET test with PostgreSQL"
-            echo
-            echo "- Runner labels: \`$RUNS_ON_JSON\`"
-            echo "- Self-hosted: \`$RUNS_ON_SELF_HOSTED\`"
-            echo "- SDK: \`$(dotnet --version)\`"
-            echo "- PostgreSQL: \`${{ inputs.postgres-image }}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Self-hosted preflight
-        if: ${{ inputs.runs-on-self-hosted }}
-        run: |
-          df -h .
-          command -v docker || true
-
-      - name: Restore
-        env:
-          TARGET: ${{ inputs.target }}
-          LOCKED_MODE: ${{ inputs.locked-mode }}
-        run: |
-          args=()
-          if [[ "$LOCKED_MODE" == "true" ]]; then
-            args+=(--locked-mode)
-          fi
-          dotnet restore "$TARGET" "${args[@]}"
-
-      - name: Build
-        run: dotnet build "${{ inputs.target }}" --configuration "${{ inputs.configuration }}" --no-restore
-
-      - name: Test
-        env:
-          POSTGRES_HOST: 127.0.0.1
-          POSTGRES_PORT: ${{ inputs.postgres-host-port }}
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: medrunner-test
         run: dotnet test "${{ inputs.target }}" --configuration "${{ inputs.configuration }}" --no-build
