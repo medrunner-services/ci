@@ -21,10 +21,9 @@ on:
       semantic-release-version:
         type: string
         default: 25.0.9
-      branches-json:
+      extra-plugins:
         type: string
-        default: >-
-          [{"name":"release/stable","channel":"stable"},{"name":"release/rc","channel":"rc","prerelease":"rc"},{"name":"main","channel":"dev","prerelease":"dev"}]
+        default: ""
       enable-backpropagation:
         type: boolean
         default: true
@@ -91,21 +90,13 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
 
-      - name: Validate release policy inputs
+      - name: Validate backpropagation inputs
         env:
-          BRANCHES_JSON: ${{ inputs.branches-json }}
           RELEASE_REF_NAME: ${{ inputs.release-ref-name }}
           DEFAULT_BRANCH: ${{ inputs.default-branch }}
         shell: bash
         run: |
           set -euo pipefail
-
-          node --input-type=module <<'EOF'
-          const branches = JSON.parse(process.env.BRANCHES_JSON);
-          if (!Array.isArray(branches) || branches.length === 0) {
-            throw new Error("branches-json must be a non-empty JSON array.");
-          }
-          EOF
 
           for ref in "$RELEASE_REF_NAME" "$DEFAULT_BRANCH"; do
             case "$ref" in
@@ -116,34 +107,7 @@ jobs:
             esac
           done
 
-      - name: Reject caller-controlled semantic-release publishing
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          while IFS= read -r config; do
-            if rg -n --fixed-strings \
-              -e '@semantic-release/exec' \
-              -e '@semantic-release/npm' \
-              -e '@semantic-release/git' \
-              "$config"; then
-              echo "Caller release configuration must use the shared tag-only policy: $config" >&2
-              exit 1
-            fi
-
-            if [[ "$(basename "$config")" == package.json ]] && rg -n '"semanticRelease"[[:space:]]*:' "$config"; then
-              echo "Caller package metadata must not override semantic-release: $config" >&2
-              exit 1
-            fi
-          done < <(rg --files --hidden \
-            -g '!.git/**' \
-            -g '!node_modules/**' \
-            -g 'package.json' \
-            -g '.releaserc*' \
-            -g 'release.config.*' \
-            -g 'semantic-release.config.*')
-
-      - name: Checkout platform release assets
+      - name: Checkout platform backpropagation action
         uses: actions/checkout@v7
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
@@ -151,7 +115,6 @@ jobs:
           path: .ci/medrunner-services-ci
           persist-credentials: false
           sparse-checkout: |
-            configs/semantic-release-service.cjs
             .github/actions/release-backpropagation
           sparse-checkout-cone-mode: false
 
@@ -160,8 +123,7 @@ jobs:
         uses: cycjimmy/semantic-release-action@v6.0.0
         with:
           semantic_version: ${{ inputs.semantic-release-version }}
-          branches: ${{ inputs.branches-json }}
-          extends: .ci/medrunner-services-ci/configs/semantic-release-service.cjs
+          extra_plugins: ${{ inputs.extra-plugins }}
           ci: true
           dry_run: false
         env:
