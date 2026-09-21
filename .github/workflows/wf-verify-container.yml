@@ -1,0 +1,114 @@
+name: Verify Dockerfile
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: ubuntu-latest
+      runs-on-json:
+        type: string
+        default: ""
+      runs-on-self-hosted:
+        type: boolean
+        default: false
+      context:
+        type: string
+        default: .
+      dockerfile:
+        type: string
+        default: Dockerfile
+      timeout-minutes:
+        type: number
+        default: 30
+    secrets:
+      NODE_AUTH_TOKEN:
+        required: false
+
+permissions: {}
+
+jobs:
+  verify:
+    name: ${{ inputs.dockerfile }}
+    runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || github.token }}
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs
+        env:
+          CONTEXT_PATH: ${{ inputs.context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+        shell: bash
+        run: |
+          for path in "$CONTEXT_PATH" "$DOCKERFILE_PATH"; do
+            case "$path" in
+              /*|*..*)
+                echo "Paths must be relative and must not contain '..': $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          test -d "$CONTEXT_PATH"
+          test -f "$DOCKERFILE_PATH"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Record runner contract
+        env:
+          RUNNER_LABELS: ${{ inputs.runs-on-json || inputs.runs-on }}
+          CONTEXT_PATH: ${{ inputs.context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+        shell: bash
+        run: |
+          {
+            echo '## Dockerfile verification'
+            echo
+            echo "- Runner labels: \`$RUNNER_LABELS\`"
+            echo "- Context: \`$CONTEXT_PATH\`"
+            echo "- Dockerfile: \`$DOCKERFILE_PATH\`"
+            echo "- Docker: \`$(docker version --format '{{.Server.Version}}')\`"
+            echo "- Buildx: \`$(docker buildx version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Preflight self-hosted runner
+        if: ${{ inputs.runs-on-self-hosted }}
+        shell: bash
+        run: |
+          test -S /var/run/docker.sock || {
+            echo 'Docker socket is unavailable on this self-hosted runner.' >&2
+            exit 1
+          }
+          docker version
+          docker buildx version
+          df -h .
+
+      - name: Build Dockerfile
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: false
+          secret-envs: |
+            NODE_AUTH_TOKEN=NODE_AUTH_TOKEN
+
+      - name: Record build result
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          {
+            echo
+            echo "- Build digest: \`${IMAGE_DIGEST:-not-reported}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

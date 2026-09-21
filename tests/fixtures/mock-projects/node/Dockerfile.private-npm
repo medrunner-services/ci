@@ -1,0 +1,9 @@
+# syntax=docker/dockerfile:1
+FROM node:24-alpine
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN --mount=type=secret,id=NODE_AUTH_TOKEN,env=NODE_AUTH_TOKEN,required=true \
+    test -n "$NODE_AUTH_TOKEN" && npm ci
+COPY . .
+RUN npm run build
+CMD ["node", "-e", "process.stdout.write('private container ok\\n')"]

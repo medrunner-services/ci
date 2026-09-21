@@ -1,0 +1,209 @@
+name: Publish Docker image to GHCR
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: ubuntu-latest
+      runs-on-json:
+        type: string
+        default: ""
+      runs-on-self-hosted:
+        type: boolean
+        default: false
+      environment-name:
+        type: string
+        default: publish-ghcr
+      image:
+        type: string
+        required: true
+      context:
+        type: string
+        default: .
+      dockerfile:
+        type: string
+        default: Dockerfile
+      version:
+        type: string
+        required: true
+      release-tag:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+      version-build-arg-name:
+        type: string
+        default: VERSION
+    secrets:
+      NODE_AUTH_TOKEN:
+        required: false
+    outputs:
+      image-digest:
+        value: ${{ jobs.publish.outputs.image-digest }}
+      image-reference:
+        value: ${{ jobs.publish.outputs.image-reference }}
+
+permissions: {}
+
+jobs:
+  publish:
+    name: ${{ inputs.image }}:${{ inputs.version }}
+    runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment-name }}
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-digest: ${{ steps.build.outputs.digest }}
+      image-reference: ${{ inputs.image }}@${{ steps.build.outputs.digest }}
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN || github.token }}
+    steps:
+      - name: Validate release and build inputs
+        id: validate
+        env:
+          IMAGE: ${{ inputs.image }}
+          CONTEXT_PATH: ${{ inputs.context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          CHANNEL: ${{ inputs.channel }}
+          VERSION_BUILD_ARG_NAME: ${{ inputs.version-build-arg-name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for path in "$CONTEXT_PATH" "$DOCKERFILE_PATH"; do
+            case "$path" in
+              /*|*..*)
+                echo "Paths must be relative and must not contain '..': $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+$ ]] || {
+            echo "image must be a lowercase ghcr.io image reference: $IMAGE" >&2
+            exit 1
+          }
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-((dev|rc)\.[0-9]+))?$ ]] || {
+            echo "version must be bare SemVer or a dev/rc prerelease: $VERSION" >&2
+            exit 1
+          }
+          [[ "$RELEASE_TAG" == "v$VERSION" ]] || {
+            echo "release-tag must equal v<version>: $RELEASE_TAG" >&2
+            exit 1
+          }
+          [[ "$VERSION_BUILD_ARG_NAME" =~ ^[A-Z_][A-Z0-9_]*$ ]] || {
+            echo "version-build-arg-name must be an uppercase shell identifier." >&2
+            exit 1
+          }
+
+          case "$CHANNEL" in
+            dev)
+              [[ "$VERSION" =~ -dev\.[0-9]+$ ]] || { echo 'dev releases require a -dev.N version.' >&2; exit 1; }
+              ;;
+            rc)
+              [[ "$VERSION" =~ -rc\.[0-9]+$ ]] || { echo 'rc releases require a -rc.N version.' >&2; exit 1; }
+              ;;
+            stable)
+              [[ "$VERSION" != *-* ]] || { echo 'stable releases must not be prereleases.' >&2; exit 1; }
+              ;;
+            *)
+              echo "channel must be one of dev, rc, or stable: $CHANNEL" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "version-build-arg=$VERSION_BUILD_ARG_NAME=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout immutable release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release-tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate checked-out build files
+        env:
+          CONTEXT_PATH: ${{ inputs.context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile }}
+        shell: bash
+        run: |
+          test -d "$CONTEXT_PATH"
+          test -f "$DOCKERFILE_PATH"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Preflight self-hosted runner
+        if: ${{ inputs.runs-on-self-hosted }}
+        shell: bash
+        run: |
+          test -S /var/run/docker.sock || {
+            echo 'Docker socket is unavailable on this self-hosted runner.' >&2
+            exit 1
+          }
+          docker version
+          docker buildx version
+          df -h .
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Calculate image metadata
+        id: metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ inputs.image }}
+          tags: |
+            type=raw,value=v${{ inputs.version }}
+            type=raw,value=${{ inputs.version }}
+            type=raw,value=${{ inputs.channel }}
+            type=raw,value=${{ inputs.channel }}-latest
+            type=raw,value=latest,enable=${{ inputs.channel == 'stable' }}
+
+      - name: Build and publish Docker image
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          build-args: ${{ steps.validate.outputs.version-build-arg }}
+          secret-envs: |
+            NODE_AUTH_TOKEN=NODE_AUTH_TOKEN
+
+      - name: Record publication result
+        env:
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          CHANNEL: ${{ inputs.channel }}
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          aliases=("$CHANNEL" "${CHANNEL}-latest")
+          if [[ "$CHANNEL" == stable ]]; then
+            aliases+=(latest)
+          fi
+
+          {
+            echo '## GHCR publication'
+            echo
+            echo "- Release tag: \`$RELEASE_TAG\`"
+            echo "- Version: \`$VERSION\`"
+            echo "- Channel: \`$CHANNEL\`"
+            echo "- Immutable reference: \`$IMAGE@$IMAGE_DIGEST\`"
+            echo "- Mutable aliases: \`${aliases[*]}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

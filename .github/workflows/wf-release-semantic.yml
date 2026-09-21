@@ -1,0 +1,239 @@
+name: Semantic release
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        type: string
+        default: ubuntu-latest
+      runs-on-json:
+        type: string
+        default: ""
+      runs-on-self-hosted:
+        type: boolean
+        default: false
+      environment-name:
+        type: string
+        default: release
+      node-version:
+        type: string
+        default: 24.x
+      semantic-release-version:
+        type: string
+        default: 25.0.9
+      branches-json:
+        type: string
+        default: >-
+          [{"name":"release/stable","channel":"stable"},{"name":"release/rc","channel":"rc","prerelease":"rc"},{"name":"main","channel":"dev","prerelease":"dev"}]
+      enable-backpropagation:
+        type: boolean
+        default: true
+      release-ref-name:
+        type: string
+        default: release/stable
+      default-branch:
+        type: string
+        default: main
+      backpropagation-auto-merge:
+        type: boolean
+        default: true
+      backpropagation-approve:
+        type: boolean
+        default: true
+    secrets:
+      PR_AUTOMATION_PAT:
+        required: false
+    outputs:
+      release-published:
+        value: ${{ jobs.release.outputs.release-published }}
+      new-version:
+        value: ${{ jobs.release.outputs.new-version }}
+      new-tag:
+        value: ${{ jobs.release.outputs.new-tag }}
+      new-channel:
+        value: ${{ jobs.release.outputs.new-channel }}
+      backprop-pr-url:
+        value: ${{ jobs.release.outputs.backprop-pr-url }}
+      backprop-pr-number:
+        value: ${{ jobs.release.outputs.backprop-pr-number }}
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
+    timeout-minutes: 30
+    environment:
+      name: ${{ inputs.environment-name }}
+    concurrency:
+      group: release-semantic-${{ github.repository }}-${{ inputs.environment-name }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release-published: ${{ steps.semantic.outputs.new_release_published }}
+      new-version: ${{ steps.semantic.outputs.new_release_version }}
+      new-tag: ${{ steps.semantic.outputs.new_release_git_tag }}
+      new-channel: ${{ steps.semantic.outputs.new_release_channel }}
+      backprop-pr-url: ${{ steps.backpropagate.outputs.pr-url }}
+      backprop-pr-number: ${{ steps.backpropagate.outputs.pr-number }}
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Validate release policy inputs
+        env:
+          BRANCHES_JSON: ${{ inputs.branches-json }}
+          RELEASE_REF_NAME: ${{ inputs.release-ref-name }}
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node --input-type=module <<'EOF'
+          const branches = JSON.parse(process.env.BRANCHES_JSON);
+          if (!Array.isArray(branches) || branches.length === 0) {
+            throw new Error("branches-json must be a non-empty JSON array.");
+          }
+          EOF
+
+          for ref in "$RELEASE_REF_NAME" "$DEFAULT_BRANCH"; do
+            case "$ref" in
+              ""|/*|*..*|*//*|*[!A-Za-z0-9._/-]*)
+                echo "Invalid branch reference: $ref" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+      - name: Reject caller-controlled semantic-release publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          while IFS= read -r config; do
+            if rg -n --fixed-strings \
+              -e '@semantic-release/exec' \
+              -e '@semantic-release/npm' \
+              -e '@semantic-release/git' \
+              "$config"; then
+              echo "Caller release configuration must use the shared tag-only policy: $config" >&2
+              exit 1
+            fi
+
+            if [[ "$(basename "$config")" == package.json ]] && rg -n '"semanticRelease"[[:space:]]*:' "$config"; then
+              echo "Caller package metadata must not override semantic-release: $config" >&2
+              exit 1
+            fi
+          done < <(rg --files --hidden \
+            -g '!.git/**' \
+            -g '!node_modules/**' \
+            -g 'package.json' \
+            -g '.releaserc*' \
+            -g 'release.config.*' \
+            -g 'semantic-release.config.*')
+
+      - name: Checkout platform release assets
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .ci/medrunner-services-ci
+          persist-credentials: false
+          sparse-checkout: |
+            configs/semantic-release-service.cjs
+            .github/actions/release-backpropagation
+          sparse-checkout-cone-mode: false
+
+      - name: Run semantic-release
+        id: semantic
+        uses: cycjimmy/semantic-release-action@v6.0.0
+        with:
+          semantic_version: ${{ inputs.semantic-release-version }}
+          branches: ${{ inputs.branches-json }}
+          extends: .ci/medrunner-services-ci/configs/semantic-release-service.cjs
+          ci: true
+          dry_run: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Check stable release reachability
+        id: backprop-preflight
+        if: >-
+          ${{
+            steps.semantic.outputs.new_release_published == 'true' &&
+            steps.semantic.outputs.new_release_channel == 'stable' &&
+            inputs.enable-backpropagation
+          }}
+        env:
+          RELEASE_REF_NAME: ${{ inputs.release-ref-name }}
+          DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin \
+            "+refs/heads/${RELEASE_REF_NAME}:refs/remotes/origin/${RELEASE_REF_NAME}" \
+            "+refs/heads/${DEFAULT_BRANCH}:refs/remotes/origin/${DEFAULT_BRANCH}"
+
+          if git merge-base --is-ancestor "origin/${RELEASE_REF_NAME}" "origin/${DEFAULT_BRANCH}"; then
+            echo 'needed=false' >> "$GITHUB_OUTPUT"
+            echo "reason=release history is already reachable from ${DEFAULT_BRANCH}" >> "$GITHUB_OUTPUT"
+          else
+            echo 'needed=true' >> "$GITHUB_OUTPUT"
+            echo 'reason=release history must be back-propagated' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up .NET for backpropagation
+        if: ${{ steps.backprop-preflight.outputs.needed == 'true' }}
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Backpropagate stable release history
+        id: backpropagate
+        if: ${{ steps.backprop-preflight.outputs.needed == 'true' }}
+        uses: ./.ci/medrunner-services-ci/.github/actions/release-backpropagation
+        with:
+          new-version: ${{ steps.semantic.outputs.new_release_version }}
+          release-ref-name: ${{ inputs.release-ref-name }}
+          default-branch: ${{ inputs.default-branch }}
+          auto-merge: ${{ inputs.backpropagation-auto-merge }}
+          approve: ${{ inputs.backpropagation-approve }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_AUTOMATION_PAT: ${{ secrets.PR_AUTOMATION_PAT }}
+
+      - name: Record release result
+        env:
+          RELEASE_PUBLISHED: ${{ steps.semantic.outputs.new_release_published }}
+          NEW_VERSION: ${{ steps.semantic.outputs.new_release_version }}
+          NEW_TAG: ${{ steps.semantic.outputs.new_release_git_tag }}
+          NEW_CHANNEL: ${{ steps.semantic.outputs.new_release_channel }}
+          BACKPROP_NEEDED: ${{ steps.backprop-preflight.outputs.needed }}
+          BACKPROP_REASON: ${{ steps.backprop-preflight.outputs.reason }}
+          BACKPROP_PR_URL: ${{ steps.backpropagate.outputs.pr-url }}
+          BACKPROP_PR_NUMBER: ${{ steps.backpropagate.outputs.pr-number }}
+        shell: bash
+        run: |
+          {
+            echo '## Semantic release'
+            echo
+            echo "- Release published: \`${RELEASE_PUBLISHED:-false}\`"
+            echo "- Version: \`${NEW_VERSION:-none}\`"
+            echo "- Tag: \`${NEW_TAG:-none}\`"
+            echo "- Channel: \`${NEW_CHANNEL:-none}\`"
+            echo "- Stable backpropagation needed: \`${BACKPROP_NEEDED:-not-applicable}\`"
+            echo "- Reachability: ${BACKPROP_REASON:-not-applicable}"
+            echo "- Backpropagation PR: ${BACKPROP_PR_URL:-none} ${BACKPROP_PR_NUMBER:+(#$BACKPROP_PR_NUMBER)}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,11 @@
+{
+  "name": "workflow-contract-node",
+  "private": true,
+  "version": "0.0.0",
+  "scripts": {
+    "build": "node -e \"process.stdout.write('build ok\\n')\"",
+    "lint": "node -e \"process.stdout.write('lint ok\\n')\"",
+    "prettier": "node -e \"process.stdout.write('prettier ok\\n')\"",
+    "test": "node -e \"process.stdout.write('test ok\\n')\""
+  }
+}

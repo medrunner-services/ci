@@ -1,0 +1,19 @@
+name: GHCR publish contract fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  publish:
+    uses: ./.github/workflows/wf-publish-container.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      image: ghcr.io/medrunner-services/workflow-contract
+      version: 1.2.3-dev.1
+      release-tag: v1.2.3-dev.1
+      channel: dev
+      environment-name: publish-ghcr

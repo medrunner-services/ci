@@ -1,0 +1,17 @@
+name: Public Dockerfile fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify:
+    uses: ./.github/workflows/wf-verify-container.yml
+    permissions:
+      contents: read
+    with:
+      runs-on-json: '["ubuntu-latest"]'
+      timeout-minutes: 10
+      context: tests/fixtures/mock-projects/node
+      dockerfile: tests/fixtures/mock-projects/node/Dockerfile

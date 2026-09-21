@@ -1,0 +1,20 @@
+name: Node workflow fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    uses: ./.github/workflows/wf-test-node.yml
+    permissions:
+      contents: read
+    with:
+      node-version: 24.x
+      working-directory: tests/fixtures/mock-projects/node
+      private-packages: false
+      run-build: true
+      run-lint: true
+      run-prettier: true
+      run-test: true

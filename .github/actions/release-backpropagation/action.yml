@@ -1,0 +1,65 @@
+# Summary:
+#   Creates and optionally auto-merges a release backpropagation pull request.
+# Remarks:
+#   This action expects GitHub CLI, .NET 10 SDK, and a checked-out caller repository.
+#   It uses GH_TOKEN for PR creation and auto-merge.
+#   It uses PR_AUTOMATION_PAT only for optional approval.
+#   It can create a new PR or reuse an existing PR from the release branch.
+
+name: Release Backpropagation
+description: Creates and optionally approves and auto-merges a release backpropagation pull request.
+
+inputs:
+  new-version:
+    description: Version that was published by semantic-release.
+    required: true
+  release-ref-name:
+    description: Release branch name that should be merged back.
+    required: true
+  default-branch:
+    description: Repository default branch that should receive the release version.
+    required: true
+  labels:
+    description: Newline-delimited labels applied to a newly created PR.
+    required: false
+    default: |
+      ci
+      automated
+  auto-merge:
+    description: Enables auto-merge for the PR when true.
+    required: false
+    default: "true"
+  merge-method:
+    description: Merge method passed to gh pr merge. Use merge, squash, or rebase.
+    required: false
+    default: merge
+  approve:
+    description: Approves the PR with PR_AUTOMATION_PAT when true.
+    required: false
+    default: "true"
+
+outputs:
+  pr-url:
+    description: Backpropagation pull request URL.
+    value: ${{ steps.backpropagation.outputs.pr-url }}
+  pr-number:
+    description: Backpropagation pull request number.
+    value: ${{ steps.backpropagation.outputs.pr-number }}
+
+runs:
+  using: composite
+  steps:
+    - name: Create release backpropagation PR
+      id: backpropagation
+      run: |
+        cd "$RUNNER_TEMP"
+        dotnet run --file "$GITHUB_ACTION_PATH/run-backpropagation.cs"
+      shell: bash
+      env:
+        ACTION_INPUT_NEW_VERSION: ${{ inputs.new-version }}
+        ACTION_INPUT_RELEASE_REF_NAME: ${{ inputs.release-ref-name }}
+        ACTION_INPUT_DEFAULT_BRANCH: ${{ inputs.default-branch }}
+        ACTION_INPUT_LABELS: ${{ inputs.labels }}
+        ACTION_INPUT_AUTO_MERGE: ${{ inputs.auto-merge }}
+        ACTION_INPUT_MERGE_METHOD: ${{ inputs.merge-method }}
+        ACTION_INPUT_APPROVE: ${{ inputs.approve }}

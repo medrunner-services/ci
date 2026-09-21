@@ -1,0 +1,47 @@
+name: Release CI platform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate GitHub Actions syntax
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo" -w /repo rhysd/actionlint:1.7.12
+        shell: bash
+
+  release:
+    if: ${{ github.event_name == 'push' }}
+    needs: lint
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Release CI platform
+        uses: cycjimmy/semantic-release-action@v6.0.0
+        with:
+          semantic_version: 25.0.9
+          extra_plugins: semantic-release-major-tag@0.3.2
+          ci: true
+          dry_run: false
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

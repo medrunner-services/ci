@@ -1,0 +1,23 @@
+name: Stable release workflow fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  release:
+    uses: ./.github/workflows/wf-release-semantic.yml
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    with:
+      environment-name: release
+      semantic-release-version: 25.0.9
+      branches-json: >-
+        [{"name":"release/stable","channel":"stable"},{"name":"release/rc","channel":"rc","prerelease":"rc"},{"name":"main","channel":"dev","prerelease":"dev"}]
+      enable-backpropagation: true
+      release-ref-name: release/stable
+      default-branch: main
+      backpropagation-approve: false

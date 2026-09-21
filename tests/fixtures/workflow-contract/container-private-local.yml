@@ -1,0 +1,19 @@
+name: Private Dockerfile fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  verify:
+    uses: ./.github/workflows/wf-verify-container.yml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      runs-on-json: '["ubuntu-latest"]'
+      context: tests/fixtures/mock-projects/node
+      dockerfile: tests/fixtures/mock-projects/node/Dockerfile.private-npm
+    secrets:
+      NODE_AUTH_TOKEN: ${{ secrets.NODE_AUTH_TOKEN }}

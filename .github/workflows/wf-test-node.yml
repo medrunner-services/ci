@@ -1,0 +1,162 @@
+name: wf-test-node
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Single runner label used when runs-on-json is empty.
+        required: false
+        type: string
+        default: ubuntu-latest
+      runs-on-json:
+        description: JSON runner-label array that overrides runs-on when set.
+        required: false
+        type: string
+        default: ""
+      runs-on-self-hosted:
+        description: Enables self-hosted runner preflight diagnostics.
+        required: false
+        type: boolean
+        default: false
+      node-version:
+        description: Node.js version to install.
+        required: false
+        type: string
+        default: 24.x
+      working-directory:
+        description: Repository-relative npm project directory.
+        required: false
+        type: string
+        default: .
+      npm-scope:
+        description: Private GitHub Packages npm scope.
+        required: false
+        type: string
+        default: "@medrunner-services"
+      private-packages:
+        description: Enables GitHub Packages npm authentication.
+        required: false
+        type: boolean
+        default: false
+      run-build:
+        description: Runs npm run build.
+        required: false
+        type: boolean
+        default: true
+      run-lint:
+        description: Runs npm run lint.
+        required: false
+        type: boolean
+        default: true
+      run-prettier:
+        description: Runs npm run prettier.
+        required: false
+        type: boolean
+        default: true
+      run-test:
+        description: Runs npm test.
+        required: false
+        type: boolean
+        default: true
+      timeout-minutes:
+        description: Job timeout.
+        required: false
+        type: number
+        default: 30
+
+permissions: {}
+
+jobs:
+  test:
+    name: ${{ inputs.working-directory }} @ Node ${{ inputs.node-version }}
+    runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout caller
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Validate inputs
+        env:
+          WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        run: |
+          case "$WORKING_DIRECTORY" in
+            ""|/*|*".."*)
+              echo "working-directory must be a repository-relative path without '..'." >&2
+              exit 2
+              ;;
+          esac
+          test -f "$WORKING_DIRECTORY/package.json"
+
+      - name: Setup Node.js
+        if: ${{ !inputs.private-packages }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      - name: Setup Node.js for GitHub Packages
+        if: ${{ inputs.private-packages }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          registry-url: https://npm.pkg.github.com
+          scope: ${{ inputs.npm-scope }}
+
+      - name: Record runner contract
+        env:
+          RUNS_ON_SELF_HOSTED: ${{ inputs.runs-on-self-hosted }}
+          RUNS_ON_JSON: ${{ inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest')) }}
+        run: |
+          {
+            echo "## Node test"
+            echo
+            echo "- Runner labels: \`$RUNS_ON_JSON\`"
+            echo "- Self-hosted: \`$RUNS_ON_SELF_HOSTED\`"
+            echo "- Node: \`$(node --version)\`"
+            echo "- npm: \`$(npm --version)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Self-hosted preflight
+        if: ${{ inputs.runs-on-self-hosted }}
+        run: |
+          df -h .
+          command -v docker || true
+
+      - name: Install public dependencies
+        if: ${{ !inputs.private-packages }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm ci
+
+      - name: Install private dependencies
+        if: ${{ inputs.private-packages }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: npm ci
+
+      - name: Build
+        if: ${{ inputs.run-build }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run build
+
+      - name: Lint
+        if: ${{ inputs.run-lint }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run lint
+
+      - name: Check Prettier
+        if: ${{ inputs.run-prettier }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run prettier
+
+      - name: Test
+        if: ${{ inputs.run-test }}
+        working-directory: ${{ inputs.working-directory }}
+        run: npm test
