@@ -15,8 +15,7 @@ jobs:
     with:
       environment-name: release
       semantic-release-version: 25.0.9
-      branches-json: >-
-        [{"name":"release/stable","channel":"stable"},{"name":"release/rc","channel":"rc","prerelease":"rc"},{"name":"main","channel":"dev","prerelease":"dev"}]
+      extra-plugins: semantic-release-major-tag@0.3.2
       enable-backpropagation: true
       release-ref-name: release/stable
       default-branch: main
