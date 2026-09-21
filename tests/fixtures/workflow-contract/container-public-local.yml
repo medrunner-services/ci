@@ -15,3 +15,7 @@ jobs:
       timeout-minutes: 10
       context: tests/fixtures/mock-projects/node
       dockerfile: tests/fixtures/mock-projects/node/Dockerfile
+      image: ghcr.io/medrunner-services/workflow-contract
+      version: 1.2.3-beta.1
+      release-tag: v1.2.3-beta.1
+      channel: beta

@@ -13,7 +13,7 @@ jobs:
       packages: write
     with:
       image: ghcr.io/medrunner-services/workflow-contract
-      version: 1.2.3-dev.1
-      release-tag: v1.2.3-dev.1
-      channel: dev
+      version: 1.2.3-beta.1
+      release-tag: v1.2.3-beta.1
+      channel: beta
       environment-name: publish-ghcr

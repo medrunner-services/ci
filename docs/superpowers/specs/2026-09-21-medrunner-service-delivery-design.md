@@ -50,6 +50,10 @@ Pull requests run verification only.
 
 The channel is explicit at the caller boundary rather than inferred from a Docker tag.
 
+The examples below use `dev` and `rc`, but a caller may select any valid OCI-tag channel for a prerelease release.
+
+The channel need not match the SemVer prerelease identifier.
+
 Development publication produces immutable `vX.Y.Z-dev.N` and `X.Y.Z-dev.N` tags plus mutable `dev` and `dev-latest` aliases.
 
 Release-candidate publication produces immutable `vX.Y.Z-rc.N` and `X.Y.Z-rc.N` tags plus mutable `rc` and `rc-latest` aliases.
@@ -70,7 +74,7 @@ branches: [
 ]
 ```
 
-The configured prerelease identifiers are unique and exactly match the image channels.
+The configured prerelease identifiers are unique.
 
 ## Architecture
 
