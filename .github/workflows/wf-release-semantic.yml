@@ -155,13 +155,20 @@ jobs:
             .github/actions/release-backpropagation
           sparse-checkout-cone-mode: false
 
+      - name: Configure shared semantic-release policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The action's `extends` input is npm-installed and only supports shareable packages.
+          # Copy the reviewed platform configuration to the caller root for normal discovery.
+          cp .ci/medrunner-services-ci/configs/semantic-release-service.cjs release.config.cjs
+
       - name: Run semantic-release
         id: semantic
         uses: cycjimmy/semantic-release-action@v6.0.0
         with:
           semantic_version: ${{ inputs.semantic-release-version }}
           branches: ${{ inputs.branches-json }}
-          extends: .ci/medrunner-services-ci/configs/semantic-release-service.cjs
           ci: true
           dry_run: false
         env:
