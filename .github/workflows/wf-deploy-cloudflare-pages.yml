@@ -1,0 +1,174 @@
+name: Deploy static Cloudflare Pages artifact
+
+on:
+  workflow_call:
+    inputs:
+      environment-name:
+        description: Caller GitHub environment with CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
+        required: true
+        type: string
+      artifact-id:
+        description: Immutable artifact ID produced in this workflow run.
+        required: true
+        type: string
+      source-sha:
+        description: Commit used to build the artifact.
+        required: true
+        type: string
+      config-ref:
+        description: Trusted commit/tag containing the Wrangler config; PRs must use the target branch commit.
+        required: true
+        type: string
+      config-path:
+        description: Repository-relative strict JSON Wrangler Pages configuration.
+        type: string
+        default: wrangler.json
+      branch:
+        description: Pages branch; determines production versus preview in Cloudflare.
+        required: true
+        type: string
+      production-branch:
+        description: Expected provisioned project production branch.
+        type: string
+        default: main
+      wrangler-version:
+        description: Exact Wrangler version; floating versions are rejected.
+        type: string
+        default: 4.148.0
+    outputs:
+      deployed:
+        value: ${{ jobs.deploy.outputs.deployed }}
+      deployment-url:
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+      alias-url:
+        value: ${{ jobs.deploy.outputs.alias-url }}
+
+permissions: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: ${{ inputs.environment-name }}
+      url: ${{ steps.deploy.outputs.pages-deployment-alias-url || steps.deploy.outputs.deployment-url }}
+    permissions:
+      contents: read
+    outputs:
+      deployed: ${{ steps.smoke.outcome == 'success' }}
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      alias-url: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout trusted deployment configuration
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.config-ref }}
+          sparse-checkout: ${{ inputs.config-path }}
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24.x
+          package-manager-cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ inputs.artifact-id }}
+          merge-multiple: true
+          path: .pages-deploy/dist
+          digest-mismatch: error
+      - name: Prepare static deployment
+        id: config
+        env:
+          CONFIG_PATH: ${{ inputs.config-path }}
+          DEPLOY_BRANCH: ${{ inputs.branch }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          WRANGLER_VERSION: ${{ inputs.wrangler-version }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, readdirSync, lstatSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
+          import { isAbsolute, join } from 'node:path';
+          const env = process.env;
+          assert.ok(env.CONFIG_PATH && !isAbsolute(env.CONFIG_PATH) && !env.CONFIG_PATH.includes('..') && !env.CONFIG_PATH.includes('\\'), 'Invalid configuration path');
+          assert.match(env.DEPLOY_BRANCH, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'Invalid deployment branch');
+          assert.match(env.SOURCE_SHA, /^[a-f0-9]{40}$/i, 'Invalid source commit');
+          if (env.WRANGLER_VERSION) assert.match(env.WRANGLER_VERSION, /^\d+\.\d+\.\d+$/, 'Pin an exact Wrangler version');
+          const config = JSON.parse(readFileSync(env.CONFIG_PATH, 'utf8'));
+          assert.match(config.name, /^[a-z0-9][a-z0-9-]+$/, 'Invalid Pages project');
+          assert.ok(typeof config.pages_build_output_dir === 'string' && config.pages_build_output_dir, 'Missing Pages output directory');
+          let count = 0;
+          const scan = directory => {
+            for (const name of readdirSync(directory)) {
+              const path = join(directory, name);
+              const stat = lstatSync(path);
+              assert.ok(!stat.isSymbolicLink(), 'Static assets cannot contain symlinks');
+              assert.ok(!name.startsWith('.'), 'Static assets cannot contain hidden files');
+              assert.ok(!['_worker.js', '_routes.json', 'functions'].includes(name), 'Only static Pages assets are supported');
+              if (stat.isDirectory()) scan(path);
+              else {
+                assert.ok(stat.isFile() && stat.size <= 25 * 1024 * 1024, 'Invalid or oversized Pages asset');
+                count++;
+              }
+            }
+          };
+          scan('.pages-deploy/dist');
+          assert.ok(count <= 20000 && existsSync('.pages-deploy/dist/index.html'), 'Missing index.html or too many Pages assets');
+          writeFileSync('.pages-deploy/wrangler.json', JSON.stringify({ ...config, pages_build_output_dir: './dist' }, null, 2) + '\n');
+          writeFileSync('.pages-deploy/package.json', '{"private":true}\n');
+          appendFileSync(env.GITHUB_OUTPUT, `project=${config.name}\n`);
+          NODE
+      - name: Verify provisioned project
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PROJECT: ${{ steps.config.outputs.project }}
+          PRODUCTION_BRANCH: ${{ inputs.production-branch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          assert.match(process.env.CLOUDFLARE_ACCOUNT_ID || '', /^[a-f0-9]{32}$/i, 'CLOUDFLARE_ACCOUNT_ID variable is required');
+          assert.ok(process.env.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN environment secret is required');
+          const url = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${process.env.PROJECT}`;
+          const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(15000) });
+          assert.ok(response.ok, `Pages lookup failed (HTTP ${response.status}); provision/import the project first`);
+          const body = await response.json();
+          assert.ok(body.success && body.result?.production_branch === process.env.PRODUCTION_BRANCH, 'Unexpected Pages production branch');
+          NODE
+      - name: Upload static deployment
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ inputs.wrangler-version }}
+          packageManager: npm
+          workingDirectory: .pages-deploy
+          command: pages deploy --config wrangler.json --branch ${{ inputs.branch }} --commit-hash ${{ inputs.source-sha }} --commit-dirty=false
+      - name: Smoke-check deployment
+        id: smoke
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
+          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+          PROJECT: ${{ steps.config.outputs.project }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync } from 'node:fs';
+          const url = new URL(process.env.DEPLOYMENT_URL);
+          assert.ok(url.protocol === 'https:' && url.hostname.endsWith(`.${process.env.PROJECT}.pages.dev`), 'Unexpected Pages deployment URL');
+          for (let attempt = 1; attempt <= 10; attempt++) {
+            try {
+              const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
+              assert.ok(response.ok && (response.headers.get('content-type') || '').includes('text/html') && (await response.text()).includes('<html'), 'Expected deployed HTML');
+              appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Deployed: ${url.href}\n\nBranch alias: ${process.env.ALIAS_URL || '(none)'}\n\nCommit: ${process.env.SOURCE_SHA}\n`);
+              break;
+            } catch {
+              if (attempt === 10) throw new Error('Pages smoke check failed');
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+          }
+          NODE

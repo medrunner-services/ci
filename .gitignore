@@ -1,3 +1,4 @@
 .act-artifacts/
 bin/
 obj/
+node_modules/

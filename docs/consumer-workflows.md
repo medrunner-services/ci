@@ -213,6 +213,10 @@ jobs:
       channel: ${{ needs.release.outputs.new-channel }}
 ```
 
+## Pages delivery
+
+For standalone static portals, use the [Pages caller example](../examples/pages-portal.yml) and [Pages delivery guide](pages-delivery.md). The coordinator consumes caller-owned semantic-release configuration, stamps generated versions into release builds, and deploys immutable artifacts without an infrastructure repository.
+
 ## Version-derived images
 
 Every publish job passes the release outputs directly to the GHCR workflow.

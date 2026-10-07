@@ -1,12 +1,22 @@
 # Reusable CI Workflows
 
 This repository contains reusable GHA workflows for Medrunner projects.
-The workflows are published as the `v1` contract for API and bot repositories.
+The workflows are published as the `v1` contract for API, bot, and standalone site repositories.
 
 See the [workflow catalog](docs/workflow-catalog.md) for permissions, environments, outputs, and side effects.
 See the [consumer templates](docs/consumer-workflows.md) for copy-ready API, MED, and MOD caller workflows.
+See [Node sites and Cloudflare Pages](docs/pages-delivery.md) for standalone artifact builds, Pages deployment, and versioned portal delivery.
 
 ## Local validation
+
+Run the inline Pages/Node workflow contract tests:
+
+```sh
+npm ci
+npm test
+```
+
+Production delivery logic stays in workflow steps; the JavaScript files under `tests/` only exercise those steps locally. No helper script is distributed to consumer repositories.
 
 Run static workflow validation:
 

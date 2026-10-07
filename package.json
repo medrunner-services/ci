@@ -1,0 +1,7 @@
+{
+  "name": "medrunner-ci-contract-tests",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test tests/workflows/*.test.mjs" },
+  "devDependencies": { "yaml": "2.9.0" }
+}
