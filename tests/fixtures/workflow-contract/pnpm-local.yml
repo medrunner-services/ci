@@ -1,0 +1,18 @@
+name: pnpm workflow fixture
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  test:
+    uses: ./.github/workflows/wf-test-node.yml
+    permissions:
+      contents: read
+    with:
+      working-directory: tests/fixtures/mock-projects/pnpm
+      package-manager: pnpm
+      build-script: build:staging
+      lint-script: check
+      run-prettier: false

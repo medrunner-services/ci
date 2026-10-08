@@ -1,0 +1,11 @@
+{
+  "name": "workflow-contract-pnpm",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.5.1",
+  "scripts": {
+    "build:staging": "node -e \"console.log('staging build ok')\"",
+    "check": "node -e \"console.log('type and lint checks ok')\"",
+    "test": "node -e \"console.log('test ok')\""
+  }
+}

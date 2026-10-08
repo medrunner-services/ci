@@ -1,63 +1,55 @@
 # Node sites and Cloudflare Pages
 
-The CI platform supplies five reusable workflows for standalone site repositories. All delivery logic is inline in workflows; there is no downloaded helper script or dependency on an infrastructure repository.
+Site callers use the existing `wf-test-node.yml` and `wf-release-semantic.yml`, plus one new `wf-deploy-cloudflare-pages.yml` for build/upload. Production logic is inline in GHA. There is no coordinator, artifact transfer, provisioning workflow, or downloaded helper script.
 
-| Workflow | Contract |
+See the [portal caller example](../examples/pages-portal.yml). Keep branch selection and application-specific notifications in the caller.
+
+## Flow
+
+| Event | Jobs |
 | --- | --- |
-| `wf-build-node.yml` | Check out `source-ref`, install a frozen npm/pnpm lockfile, check/test/build, and upload an immutable artifact. Returns `artifact-id`, `artifact-name`, `source-sha`, and `version`. |
-| `wf-deploy-cloudflare-pages.yml` | Download an artifact from the current run by ID, verify its digest, validate static assets and trusted Wrangler configuration, check the provisioned project, upload with pinned Wrangler, and smoke-check HTML. Returns `deployed`, `deployment-url`, and `alias-url`. |
-| `wf-deliver-node-pages.yml` | Compose verification, semantic release, a build from the release tag, and Pages deployment using the standard Medrunner branch/channel convention. Returns `deployed`, `deployment-url`, `environment-name`, and `version`. |
-| `wf-lint-github-actions.yml` | Run actionlint against the caller workflows. |
-| `wf-validate-opentofu.yml` | Run fmt, init with a read-only provider lockfile and disabled backend, and validate. Never plan/apply or use Cloudflare credentials. |
+| PR into `main` or `release/stable` | Node validation only. |
+| Push to `main` | Semantic prerelease when needed → staging build/upload. |
+| Push to `release/stable` | Semantic stable release when needed → production build/upload. |
 
-Use the individual build/deploy workflows for custom delivery policies. The coordinator is the standard Node 24/pnpm site path: `build`, `build:staging`, `check`, and `test` scripts; `dist` output; `vX.Y.Z` stable tags and `vX.Y.Z-dev.N` staging tags. Its nested workflow calls resolve from the same CI commit. Consumer references use `@v1` after the platform release publishes the new workflows; an immutable CI release tag or SHA can be used instead.
+Protect both delivery branches and require PR validation. GitHub environments select values; leave reviewer/wait gates disabled when merged PRs are the approval boundary. No feature-branch deployments are configured.
 
-## Public build configuration
+The Node test workflow remains backward compatible: npm by default, existing script flags and runner options unchanged. New `package-manager: pnpm` reads the caller's declared pnpm version. `lint-script: check` can include type checks, `build-script` selects production/staging build, and `run-prettier: false` skips repositories without that script. Both managers use frozen installs; only private package installation receives `GITHUB_TOKEN`.
 
-The builder requires `environment-name`, reads that environment's `vars` inside a runner step, and maps only the requested public values to shell variables. `public-env-map` is a JSON object such as `{"SITE_API_URL":"API_URL"}`. `required-public-env` is a JSON array such as `["SITE_API_URL"]`. Missing optional values become empty strings. `public-env-overrides` provides literal public values, for example a PR callback origin. Reserved runner variables and multiline values are rejected. These inputs must never contain credentials; browser configuration is public.
+## Pages build/deploy contract
 
-For private GitHub Packages, set `private-packages: true`, grant the caller repository package read access, and set `npm-scope` to its package scope. Only dependency installation receives `GITHUB_TOKEN` as `NODE_AUTH_TOKEN`. No Cloudflare or notification secret is referenced by the build workflow.
+Required input: `environment-name`.
 
-The builder supports `package-manager: npm` or `pnpm`; the latter reads `packageManager` from package.json. `working-directory`, `artifact-path`, and the package script names are configurable. Empty `check-script`/`test-script` values skip those steps. Give each invocation a distinct `artifact-name` prefix when building multiple artifacts in one run.
+Optional inputs: `branch` (triggering branch), `production-branch` (`main`), `source-ref` (triggering commit), `version`, `node-version` (`24.x`), `package-manager` (`pnpm`), `working-directory` (`.`), `private-packages` (`false`), `npm-scope` (`@medrunner-services`), `build-script` (`build`), `public-env-map` (`{}`), `required-public-env` (`[]`), and `wrangler-version` (`4.148.0`).
 
-Pass a generated semantic `version` for release builds. The builder updates package.json locally after frozen dependency installation and checks, then runs the build so npm/pnpm exposes the new `npm_package_version`. It does not commit the changed manifest or change the dependency lockfile. pnpm's automatic installation before scripts is disabled because dependencies were already installed from the frozen lockfile, and version stamping must not trigger another installation. `source-sha` records the checked-out release commit.
+Outputs: `deployment-url`, `alias-url`, and `version`.
 
-## Static deployment boundary
+The single job checks out the source, installs locked dependencies, maps public variables, stamps the build version, builds, then uploads with `cloudflare/wrangler-action@v4`. Wrangler installs into a temporary tool directory so its npm installation cannot reinstall private application dependencies; it reads the app's Wrangler config and uploads its build output directly. The job skips pull-request events. It grants `contents: read` and `packages: read`; Cloudflare credentials are referenced only by the upload action.
 
-The deployer requires `environment-name`, `artifact-id`, `source-sha`, `config-ref`, and `branch`. `config-path` defaults to `wrangler.json` and must be strict JSON with `name` and `pages_build_output_dir`. It copies the trusted configuration into an isolated deployment directory and rewrites only the output path to the downloaded artifact directory. Package scripts from the caller are never installed or executed on the deployment runner.
+The caller provides `source-ref: new-tag || github.sha` and `version: new-version` from semantic release. Every merge deploys, including commits that do not create a new version. Without a supplied version, the deployer finds the nearest reachable `v*` release tag; production excludes prerelease tags. Without any tag it uses package.json. Version stamping occurs after frozen dependency installation, modifies no lockfile, and is never committed. pnpm's implicit installation before scripts is disabled.
 
-Configure `CLOUDFLARE_API_TOKEN` as a secret in the caller GitHub environment and `CLOUDFLARE_ACCOUNT_ID` as a variable there or at repository/organization scope. Environment secrets are resolved by the runner job; do not forward them or use `secrets: inherit`. The workflow checks that the existing Pages project's production branch matches `production-branch` (default `main`). It never creates a project. `wrangler-version` defaults to `4.148.0` and must be an exact numeric version.
+`wrangler.json` belongs to the caller and supplies the project name and output directory. Wrangler uses `--cwd` to discover it in `working-directory`; Pages does not accept custom `--config` paths. The command explicitly supplies the deployment branch; Cloudflare's production branch must be configured separately. The uploader does not create or reconfigure Cloudflare projects.
 
-Only static HTML sites are supported. The artifact needs `index.html`; it may not contain symlinks, hidden files, `functions`, `_worker.js`, or `_routes.json`. Assets are limited to 25 MiB each and 20,000 files. Workers/Pages Functions require a different deployment contract. The smoke check expects public HTML; an Access-protected origin requires adapting authentication before enabling Access.
+## Environment values
 
-`branch` controls Cloudflare production/preview classification. GitHub environment names independently control variables, secrets, and approval/branch gates. Do not assume a GitHub environment name changes the Cloudflare target.
+Create `deploy-cf-production`, `deploy-cf-staging`, and `release` in each caller. Set unsuffixed public variables and secrets in the selected environment. Values identical everywhere may be repository/organization variables. Environments do not inherit values from each other.
 
-## Standard versioned delivery
+`public-env-map` is JSON mapping shell build names to GitHub variables, e.g. `{"VITE_API_URL":"API_URL"}`. It resolves inside the selected job, not in caller inputs. `required-public-env` lists names that must be nonempty. Optional missing values become empty strings. Multiline values and reserved runner names are rejected. Browser variables are public.
 
-The [caller example](../examples/pages-portal.yml) demonstrates a Vite portal. Customize the public variable map, package scope, and application-specific notification step. Its routing/release/upload implementation is shared through the coordinator.
+Set `CLOUDFLARE_API_TOKEN` as an environment secret and `CLOUDFLARE_ACCOUNT_ID` as a variable. Do not forward environment secrets or use `secrets: inherit`. For private GitHub Packages, enable `private-packages`, set the scope, and grant the caller repository Actions read access to the package.
 
-| Event | GitHub environment | Source and delivery |
-| --- | --- | --- |
-| Push to `release/stable` | `deploy-cf-production` | Verify, semantic stable release, rebuild from the new tag with its version, deploy to the Pages production branch. |
-| Push to `main` | `deploy-cf-staging` | Verify, semantic `dev` prerelease on channel `staging`, rebuild from the new tag, deploy to the stable `main` preview alias. |
-| Same-repository, non-draft `feat/*` or `fix/*` PR targeting either branch | `deploy-cf-preview` | Verify/build the merge commit and deploy to `pr-<number>` using trusted target-branch configuration. |
-| Other/draft/fork PR | `deploy-cf-preview` | Verify/build with public staging values; no upload to Cloudflare or release. Private package access may be unavailable to forks. |
-| Manual dispatch on a delivery branch | Production/staging environment | Redeploy the supplied existing tag after verification; the tag must match the channel and be reachable from the selected branch. |
+The `release` environment needs no manual GitHub token. Caller-owned `release.config.mjs` defines stable and staging channels. Stable backpropagation can open a PR, with automatic approval/merge disabled in the example; allow Actions PR creation if using it.
 
-The coordinator accepts `production-branch`, `staging-branch`, `environment-prefix`, `preview-branch-prefixes`, `preview-callback-variable`, `config-path`, `release-tag`, `private-packages`, `npm-scope`, `public-env-map`, `required-public-env`, and `wrangler-version`. Set `preview-callback-variable` only when the site needs an OAuth callback origin; it overrides that shell variable with `https://pr-<number>.<project>.pages.dev` for eligible previews. Otherwise no preview override is generated.
+## Cloudflare setup
 
-The caller owns `release.config.mjs` and uses Conventional Commits. Configure stable channel `stable` on the production branch and channel `staging` with prerelease `dev` on the staging branch. The existing `wf-release-semantic.yml` handles releases in the caller's `release` GitHub environment. Stable history backpropagation opens a PR when needed; the coordinator disables automatic approval and auto-merge. Allow Actions to create PRs and use required checks/reviews for those PRs.
+Keep one existing Pages project per portal. Set production branch to `release/stable`; deploy `main` as the fixed staging alias. Create new projects using Direct Upload. Disable automatic Git builds for existing Git-connected projects. No Cloudflare build variables or build command are needed when GHA builds the site.
 
-Pushes without a releasable commit run verification but do not publish a new Pages deployment. Manual dispatch supplies an existing release tag to retry or roll back a deployment. Configure workflow concurrency to cancel superseded PR runs while letting release runs finish. Initialize release history with the last genuine released tag at its audited commit before migration; package.json alone does not establish a semantic-release baseline.
+Configure domains through the dashboard. Production CNAMEs point to `<project>.pages.dev`; staging CNAMEs point to `main.<project>.pages.dev`. Add the custom domain in Pages first; staging branch aliases require proxied Cloudflare DNS. Register the fixed target origins and OAuth callback paths with the corresponding API/authentication providers.
 
-## GitHub environments and setup
+See official [Direct Upload/production branch instructions](https://developers.cloudflare.com/pages/get-started/direct-upload/), [GHA credential setup](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/), and [branch custom domains](https://developers.cloudflare.com/pages/how-to/custom-branch-aliases/).
 
-Create `deploy-cf-production`, `deploy-cf-staging`, `deploy-cf-preview`, and `release` in each caller repository. Use unsuffixed public variable and secret names; staging and preview use staging values. Identical public values can live at repository/organization scope. Environments do not inherit values from each other. Check environment and protection-rule availability in the actual repository; consult [GitHub environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments) for documented plan restrictions.
-
-Set selected branch rules: production `release/stable`, staging `main`, preview `refs/pull/*/merge`, and release both delivery branches. PR rules match the merge ref rather than the head branch; the coordinator separately restricts preview eligibility. Leave preview approval/wait gates disabled for automatic validation. All jobs selecting an environment obey its gates.
-
-Provision/import Cloudflare Pages with production branch `release/stable`. Disable native Git builds when GHA owns delivery. Keep each site's Wrangler configuration, optional OpenTofu state/configuration, custom-domain setup, and OAuth/CORS registrations in the caller repository. Staging custom-domain CNAMEs point to `main.<project>.pages.dev`; production points to `<project>.pages.dev`. Register concrete preview callback origins with OAuth providers and staging CORS when login is needed.
+Release this CI change before consumer `@v1` references it, or use an immutable released tag/SHA. Audit release history and seed only a genuine previously released baseline tag at its audited commit before enabling semantic release; package.json does not establish release history.
 
 ## Validation
 
-`npm ci && npm test` executes the real inline Node steps with controlled files and events, covering public mappings, version stamping, static asset checks, target routing, preview restrictions, and manual tag ancestry. It also exercises the stable-reachability shell step against a local authenticated Git server to verify private fetches without persisted credentials. `release.yml` runs these tests before releasing the platform. Run actionlint against all workflows and the caller example as well. These tests do not make GitHub release/PR writes or Cloudflare deployments.
+`npm ci && npm test` exercises the actual inline public-variable/version steps and private stable-reachability fetch. Cases include missing configuration, injection rejection, frozen lockfile preservation, and version fallback on nonrelease merges. Run full actionlint/ShellCheck against all workflows and the caller example. These checks do not publish releases or deploy to Cloudflare.

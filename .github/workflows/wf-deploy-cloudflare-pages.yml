@@ -1,143 +1,177 @@
-name: Deploy static Cloudflare Pages artifact
+name: Build and deploy Cloudflare Pages
 
 on:
   workflow_call:
     inputs:
       environment-name:
-        description: Caller GitHub environment with CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID.
         required: true
         type: string
-      artifact-id:
-        description: Immutable artifact ID produced in this workflow run.
-        required: true
-        type: string
-      source-sha:
-        description: Commit used to build the artifact.
-        required: true
-        type: string
-      config-ref:
-        description: Trusted commit/tag containing the Wrangler config; PRs must use the target branch commit.
-        required: true
-        type: string
-      config-path:
-        description: Repository-relative strict JSON Wrangler Pages configuration.
-        type: string
-        default: wrangler.json
       branch:
-        description: Pages branch; determines production versus preview in Cloudflare.
-        required: true
+        description: Pages deployment branch; defaults to the triggering branch.
         type: string
+        default: ""
       production-branch:
-        description: Expected provisioned project production branch.
+        description: Production branch, used to exclude prerelease tags from version fallback.
         type: string
         default: main
+      source-ref:
+        description: Optional released tag; otherwise build the triggering commit.
+        type: string
+        default: ""
+      version:
+        description: Generated semantic version; otherwise use the nearest reachable release tag.
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: 24.x
+      package-manager:
+        type: string
+        default: pnpm
+      working-directory:
+        type: string
+        default: .
+      private-packages:
+        type: boolean
+        default: false
+      npm-scope:
+        type: string
+        default: "@medrunner-services"
+      build-script:
+        type: string
+        default: build
+      public-env-map:
+        description: JSON object mapping public build variables to GitHub variable names.
+        type: string
+        default: "{}"
+      required-public-env:
+        type: string
+        default: "[]"
       wrangler-version:
-        description: Exact Wrangler version; floating versions are rejected.
         type: string
         default: 4.148.0
     outputs:
-      deployed:
-        value: ${{ jobs.deploy.outputs.deployed }}
       deployment-url:
         value: ${{ jobs.deploy.outputs.deployment-url }}
       alias-url:
         value: ${{ jobs.deploy.outputs.alias-url }}
+      version:
+        value: ${{ jobs.deploy.outputs.version }}
 
 permissions: {}
 
 jobs:
   deploy:
+    if: ${{ github.event_name != 'pull_request' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     environment:
       name: ${{ inputs.environment-name }}
       url: ${{ steps.deploy.outputs.pages-deployment-alias-url || steps.deploy.outputs.deployment-url }}
     permissions:
       contents: read
-    outputs:
-      deployed: ${{ steps.smoke.outcome == 'success' }}
-      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
-      alias-url: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+      packages: read
+    env:
+      # Dependencies were explicitly installed from the frozen lockfile.
+      pnpm_config_verify_deps_before_run: "false"
     defaults:
       run:
         shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      alias-url: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout trusted deployment configuration
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.config-ref }}
-          sparse-checkout: ${{ inputs.config-path }}
-          sparse-checkout-cone-mode: false
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.x
+          node-version: ${{ inputs.node-version }}
           package-manager-cache: false
-      - uses: actions/download-artifact@v8
+      - uses: pnpm/action-setup@v4
+        if: ${{ inputs.package-manager == 'pnpm' }}
         with:
-          artifact-ids: ${{ inputs.artifact-id }}
-          merge-multiple: true
-          path: .pages-deploy/dist
-          digest-mismatch: error
-      - name: Prepare static deployment
-        id: config
+          package_json_file: ${{ inputs.working-directory }}/package.json
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json' }}
+          registry-url: ${{ inputs.private-packages && 'https://npm.pkg.github.com' || 'https://registry.npmjs.org' }}
+          scope: ${{ inputs.private-packages && inputs.npm-scope || '' }}
+      - name: Set public build environment
         env:
-          CONFIG_PATH: ${{ inputs.config-path }}
-          DEPLOY_BRANCH: ${{ inputs.branch }}
-          SOURCE_SHA: ${{ inputs.source-sha }}
-          WRANGLER_VERSION: ${{ inputs.wrangler-version }}
+          PUBLIC_VARIABLES: ${{ toJSON(vars) }}
+          PUBLIC_ENV_MAP: ${{ inputs.public-env-map }}
+          REQUIRED_PUBLIC_ENV: ${{ inputs.required-public-env }}
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
-          import { readFileSync, readdirSync, lstatSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
-          import { isAbsolute, join } from 'node:path';
-          const env = process.env;
-          assert.ok(env.CONFIG_PATH && !isAbsolute(env.CONFIG_PATH) && !env.CONFIG_PATH.includes('..') && !env.CONFIG_PATH.includes('\\'), 'Invalid configuration path');
-          assert.match(env.DEPLOY_BRANCH, /^[A-Za-z0-9][A-Za-z0-9._/-]*$/, 'Invalid deployment branch');
-          assert.match(env.SOURCE_SHA, /^[a-f0-9]{40}$/i, 'Invalid source commit');
-          if (env.WRANGLER_VERSION) assert.match(env.WRANGLER_VERSION, /^\d+\.\d+\.\d+$/, 'Pin an exact Wrangler version');
-          const config = JSON.parse(readFileSync(env.CONFIG_PATH, 'utf8'));
-          assert.match(config.name, /^[a-z0-9][a-z0-9-]+$/, 'Invalid Pages project');
-          assert.ok(typeof config.pages_build_output_dir === 'string' && config.pages_build_output_dir, 'Missing Pages output directory');
-          let count = 0;
-          const scan = directory => {
-            for (const name of readdirSync(directory)) {
-              const path = join(directory, name);
-              const stat = lstatSync(path);
-              assert.ok(!stat.isSymbolicLink(), 'Static assets cannot contain symlinks');
-              assert.ok(!name.startsWith('.'), 'Static assets cannot contain hidden files');
-              assert.ok(!['_worker.js', '_routes.json', 'functions'].includes(name), 'Only static Pages assets are supported');
-              if (stat.isDirectory()) scan(path);
-              else {
-                assert.ok(stat.isFile() && stat.size <= 25 * 1024 * 1024, 'Invalid or oversized Pages asset');
-                count++;
-              }
-            }
-          };
-          scan('.pages-deploy/dist');
-          assert.ok(count <= 20000 && existsSync('.pages-deploy/dist/index.html'), 'Missing index.html or too many Pages assets');
-          writeFileSync('.pages-deploy/wrangler.json', JSON.stringify({ ...config, pages_build_output_dir: './dist' }, null, 2) + '\n');
-          writeFileSync('.pages-deploy/package.json', '{"private":true}\n');
-          appendFileSync(env.GITHUB_OUTPUT, `project=${config.name}\n`);
+          import { appendFileSync } from 'node:fs';
+          const variables = JSON.parse(process.env.PUBLIC_VARIABLES);
+          const mapping = JSON.parse(process.env.PUBLIC_ENV_MAP);
+          assert.ok(mapping && !Array.isArray(mapping) && typeof mapping === 'object', 'public-env-map must be an object');
+          const selected = Object.fromEntries(Object.entries(mapping).map(([key, name]) => {
+            assert.ok(/^[A-Z_][A-Z0-9_]*$/.test(key) && !/^(GITHUB_|RUNNER_|ACTIONS_)/.test(key) && !['NODE_OPTIONS', 'NODE_AUTH_TOKEN', 'PATH', 'HOME'].includes(key), 'Invalid build variable');
+            assert.ok(typeof name === 'string' && /^[A-Z_][A-Z0-9_]*$/.test(name), 'Invalid GitHub variable name');
+            const value = variables[name] || '';
+            assert.ok(typeof value === 'string' && !/[\r\n\0]/.test(value), 'Build values must be single-line strings');
+            return [key, value];
+          }));
+          const required = JSON.parse(process.env.REQUIRED_PUBLIC_ENV);
+          assert.ok(Array.isArray(required), 'required-public-env must be an array');
+          for (const key of required) assert.ok(selected[key]?.trim(), key + ' is required in this environment');
+          appendFileSync(process.env.GITHUB_ENV, Object.entries(selected).map(([key, value]) => key + '=' + value + '\n').join(''));
           NODE
-      - name: Verify provisioned project
+      - name: Install locked dependencies
         env:
-          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          PROJECT: ${{ steps.config.outputs.project }}
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          NODE_AUTH_TOKEN: ${{ inputs.private-packages && github.token || '' }}
+        run: |
+          case "$PACKAGE_MANAGER" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            npm) npm ci ;;
+            *) echo "Use npm or pnpm." >&2; exit 1 ;;
+          esac
+      - name: Set build version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           PRODUCTION_BRANCH: ${{ inputs.production-branch }}
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
-          assert.match(process.env.CLOUDFLARE_ACCOUNT_ID || '', /^[a-f0-9]{32}$/i, 'CLOUDFLARE_ACCOUNT_ID variable is required');
-          assert.ok(process.env.CLOUDFLARE_API_TOKEN, 'CLOUDFLARE_API_TOKEN environment secret is required');
-          const url = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/${process.env.PROJECT}`;
-          const response = await fetch(url, { headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` }, signal: AbortSignal.timeout(15000) });
-          assert.ok(response.ok, `Pages lookup failed (HTTP ${response.status}); provision/import the project first`);
-          const body = await response.json();
-          assert.ok(body.success && body.result?.production_branch === process.env.PRODUCTION_BRANCH, 'Unexpected Pages production branch');
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          let version = process.env.RELEASE_VERSION;
+          if (!version) {
+            const args = ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*'];
+            if (process.env.DEPLOY_BRANCH === process.env.PRODUCTION_BRANCH) args.push('--exclude', 'v*-*');
+            try { version = execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().slice(1); }
+            catch { version = pkg.version; }
+          }
+          assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Invalid build version');
+          writeFileSync('package.json', JSON.stringify({ ...pkg, version }, null, 2) + '\n');
+          appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + version + '\n');
           NODE
-      - name: Upload static deployment
+      - name: Build
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: '"$PACKAGE_MANAGER" run "$BUILD_SCRIPT"'
+      - name: Prepare Wrangler
+        id: source
+        run: |
+          # Install Wrangler outside the app so npm never reinstalls its private dependencies.
+          mkdir -p "$RUNNER_TEMP/pages-wrangler"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Deploy to Cloudflare Pages
         id: deploy
         uses: cloudflare/wrangler-action@v4
         with:
@@ -145,30 +179,5 @@ jobs:
           accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: ${{ inputs.wrangler-version }}
           packageManager: npm
-          workingDirectory: .pages-deploy
-          command: pages deploy --config wrangler.json --branch ${{ inputs.branch }} --commit-hash ${{ inputs.source-sha }} --commit-dirty=false
-      - name: Smoke-check deployment
-        id: smoke
-        env:
-          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment-url }}
-          ALIAS_URL: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
-          PROJECT: ${{ steps.config.outputs.project }}
-          SOURCE_SHA: ${{ inputs.source-sha }}
-        run: |
-          node --input-type=module <<'NODE'
-          import assert from 'node:assert/strict';
-          import { appendFileSync } from 'node:fs';
-          const url = new URL(process.env.DEPLOYMENT_URL);
-          assert.ok(url.protocol === 'https:' && url.hostname.endsWith(`.${process.env.PROJECT}.pages.dev`), 'Unexpected Pages deployment URL');
-          for (let attempt = 1; attempt <= 10; attempt++) {
-            try {
-              const response = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(10000) });
-              assert.ok(response.ok && (response.headers.get('content-type') || '').includes('text/html') && (await response.text()).includes('<html'), 'Expected deployed HTML');
-              appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Deployed: ${url.href}\n\nBranch alias: ${process.env.ALIAS_URL || '(none)'}\n\nCommit: ${process.env.SOURCE_SHA}\n`);
-              break;
-            } catch {
-              if (attempt === 10) throw new Error('Pages smoke check failed');
-              await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-          }
-          NODE
+          workingDirectory: ${{ runner.temp }}/pages-wrangler
+          command: pages deploy --cwd "${{ github.workspace }}/${{ inputs.working-directory }}" --branch ${{ inputs.branch || github.ref_name }} --commit-hash ${{ steps.source.outputs.sha }} --commit-dirty=false

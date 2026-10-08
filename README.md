@@ -5,7 +5,7 @@ The workflows are published as the `v1` contract for API, bot, and standalone si
 
 See the [workflow catalog](docs/workflow-catalog.md) for permissions, environments, outputs, and side effects.
 See the [consumer templates](docs/consumer-workflows.md) for copy-ready API, MED, and MOD caller workflows.
-See [Node sites and Cloudflare Pages](docs/pages-delivery.md) for standalone artifact builds, Pages deployment, and versioned portal delivery.
+See [Node sites and Cloudflare Pages](docs/pages-delivery.md) for PR validation and simple versioned build/deploy delivery.
 
 ## Local validation
 
@@ -28,6 +28,7 @@ Run the Docker-backed Test and Dockerfile smoke suite:
 
 ```powershell
 rtk act -P ubuntu-latest=catthehacker/ubuntu:act-latest -W tests/fixtures/workflow-contract/node-local.yml workflow_dispatch -e tests/fixtures/events/workflow_dispatch.json --container-architecture linux/amd64
+rtk act -P ubuntu-latest=catthehacker/ubuntu:act-latest -W tests/fixtures/workflow-contract/pnpm-local.yml workflow_dispatch -e tests/fixtures/events/workflow_dispatch.json --container-architecture linux/amd64
 rtk act -P ubuntu-latest=catthehacker/ubuntu:act-latest -W tests/fixtures/workflow-contract/dotnet-local.yml workflow_dispatch -e tests/fixtures/events/workflow_dispatch.json --container-architecture linux/amd64
 rtk act -P ubuntu-latest=catthehacker/ubuntu:act-latest -W tests/fixtures/workflow-contract/container-public-local.yml workflow_dispatch -e tests/fixtures/events/workflow_dispatch.json --container-architecture linux/amd64
 rtk act -P ubuntu-latest=catthehacker/ubuntu:act-latest -W tests/fixtures/workflow-contract/container-private-local.yml workflow_dispatch -e tests/fixtures/events/workflow_dispatch.json --container-architecture linux/amd64 --secret NODE_AUTH_TOKEN=fixture-token
