@@ -118,7 +118,7 @@ jobs:
           node-version: ${{ inputs.node-version }}
           package-manager-cache: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         if: ${{ inputs.package-manager == 'pnpm' }}
         with:
           package_json_file: ${{ inputs.working-directory }}/package.json
