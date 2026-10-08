@@ -124,6 +124,18 @@ test('valid caller build metadata is accepted without opting into Git metadata',
   assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).version, '2.11.0-dev.3+build.42');
 });
 
+test('caller metadata is preserved when Git metadata is appended', t => {
+  const { root, git } = releaseFixture(t);
+  const version = '2.12.0+build.42.0.g' + git('rev-parse', '--short=7', 'HEAD');
+  const result = runStep('Set build version', root, {
+    RELEASE_VERSION: '2.12.0+build.42', INCLUDE_COMMIT_METADATA: 'true',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).version, version);
+  assert.equal(readFileSync(join(root, 'github-output'), 'utf8'), 'version=' + version + '\n');
+  assert.equal(readFileSync(join(root, 'github-env'), 'utf8'), 'APP_VERSION=' + version + '\n');
+});
+
 test('tagless Git builds still identify their source and do not invent a tag distance', t => {
   const { root, git } = releaseFixture(t);
   git('tag', '-d', 'v2.12.0');
