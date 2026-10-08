@@ -22,6 +22,10 @@ on:
         description: Generated semantic version; otherwise use the nearest reachable release tag.
         type: string
         default: ""
+      include-commit-metadata:
+        description: Append Git commit distance and hash as SemVer build metadata.
+        type: boolean
+        default: false
       node-version:
         type: string
         default: 24.x
@@ -180,6 +184,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
           PRODUCTION_BRANCH: ${{ inputs.production-branch }}
+          INCLUDE_COMMIT_METADATA: ${{ inputs.include-commit-metadata }}
         run: |
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
@@ -188,31 +193,42 @@ jobs:
 
           const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
           let version = process.env.RELEASE_VERSION;
+          const git = (...args) => execFileSync('git', args, {
+            encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+          }).trim();
+          const args = ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*'];
+          if (process.env.DEPLOY_BRANCH === process.env.PRODUCTION_BRANCH) {
+            args.push('--exclude', 'v*-*');
+          }
+          let tag;
+          try {
+            tag = git(...args);
+          } catch {
+            // A project with no release tags can still build its package.json version.
+          }
 
           // Merges without a new release still deploy, using their reachable release history.
           if (!version) {
-            const args = ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*'];
-            if (process.env.DEPLOY_BRANCH === process.env.PRODUCTION_BRANCH) {
-              args.push('--exclude', 'v*-*');
-            }
-
-            try {
-              const tag = execFileSync('git', args, {
-                encoding: 'utf8',
-                stdio: ['ignore', 'pipe', 'pipe'],
-              });
-              version = tag.trim().slice(1);
-            } catch {
-              // A project with no release tags can still build its package.json version.
-              version = pkg.version;
-            }
+            version = tag ? tag.slice(1) : pkg.version;
           }
 
-          assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Invalid build version');
+          const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-z-][\da-z-]*))*)?(?:\+[\da-z-]+(?:\.[\da-z-]+)*)?$/i;
+          assert.match(version, semver, 'Invalid build version');
+          assert.ok(!/[\r\n\0]/.test(version), 'Invalid build version');
+
+          if (process.env.INCLUDE_COMMIT_METADATA === 'true') {
+            // Distance is meaningful only when the selected tag is for this release.
+            const distance = tag === 'v' + version.split('+')[0]
+              ? git('rev-list', '--count', tag + '..HEAD') + '.'
+              : '';
+            const metadata = distance + 'g' + git('rev-parse', '--short=7', 'HEAD');
+            version += (version.includes('+') ? '.' : '+') + metadata;
+          }
 
           // Stamp only the local build manifest; keep the lockfile and source history unchanged.
           writeFileSync('package.json', JSON.stringify({ ...pkg, version }, null, 2) + '\n');
           appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + version + '\n');
+          appendFileSync(process.env.GITHUB_ENV, 'APP_VERSION=' + version + '\n');
           NODE
 
       - name: Build
