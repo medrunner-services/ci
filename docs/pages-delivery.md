@@ -24,6 +24,10 @@ Optional inputs: `branch` (triggering branch), `production-branch` (`main`), `so
 
 Outputs: `deployment-url`, `alias-url`, and `version`.
 
+Set `include-commit-metadata: true` to identify each deployment as SemVer, for example `2.9.3+2.g28d7e96` or `2.10.0-dev.1+0.ged32d63`. The metadata contains the number of commits since the selected release tag and the abbreviated build commit; tagless builds include only the commit. The default is `false` for existing callers. Caller-supplied build metadata is preserved. Release tags and release precedence stay unchanged.
+
+The final build version is exported as `APP_VERSION`, stamped into the local manifest, and returned by the workflow's `version` output. Vite callers can prefer `APP_VERSION` in their build resolver to keep the UI, APM service version, and API deployment notification identical. Local builds can resolve their tag, distance, and commit directly; tracked uncommitted changes should add a `.dirty` metadata identifier.
+
 The single job checks out the source, installs locked dependencies, maps public variables, stamps the build version, builds, then uploads with `cloudflare/wrangler-action@v4`. Wrangler installs into a temporary tool directory so its npm installation cannot reinstall private application dependencies; it reads the app's Wrangler config and uploads its build output directly. The job skips pull-request events. It grants `contents: read` and `packages: read`; Cloudflare credentials are referenced only by the upload action.
 
 The caller provides `source-ref: new-tag || github.sha` and `version: new-version` from semantic release. Every merge deploys, including commits that do not create a new version. Without a supplied version, the deployer finds the nearest reachable `v*` release tag; production excludes prerelease tags. Without any tag it uses package.json. Version stamping occurs after frozen dependency installation, modifies no lockfile, and is never committed. pnpm's implicit installation before scripts is disabled.
