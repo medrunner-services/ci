@@ -80,16 +80,34 @@ jobs:
           VERSION: ${{ needs.deploy.outputs.version }}
         run: |
           node --input-type=module <<'NODE'
-          if (!process.env.AUTOMATION_DEPLOY) {
-            console.log('::warning::API notification skipped: AUTOMATION_DEPLOY is not configured');
-          } else {
+          async function notify() {
+            if (!process.env.AUTOMATION_DEPLOY) {
+              console.log('::warning::API notification skipped: AUTOMATION_DEPLOY is not configured');
+              return;
+            }
+
             const url = new URL('/automation/deploy', process.env.API_URL);
             if (url.protocol !== 'https:') throw new Error('Notification API must use HTTPS');
-            url.search = new URLSearchParams({ secret: process.env.AUTOMATION_DEPLOY, client: '1', version: process.env.VERSION }).toString();
+            url.search = new URLSearchParams({
+              secret: process.env.AUTOMATION_DEPLOY,
+              client: '1',
+              version: process.env.VERSION,
+            }).toString();
+
             // The API currently authenticates by query string. Never log the URL, body, or transport exception.
             let response;
-            try { response = await fetch(url, { method: 'POST', redirect: 'manual', signal: AbortSignal.timeout(10000) }); }
-            catch { throw new Error('API notification request failed'); }
+            try {
+              response = await fetch(url, {
+                method: 'POST',
+                redirect: 'manual',
+                signal: AbortSignal.timeout(10000),
+              });
+            } catch {
+              throw new Error('API notification request failed');
+            }
+
             if (!response.ok) throw new Error('API notification failed (HTTP ' + response.status + ')');
           }
+
+          await notify();
           NODE
