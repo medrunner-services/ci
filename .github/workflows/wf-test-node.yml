@@ -24,10 +24,21 @@ on:
         type: string
         default: 24.x
       working-directory:
-        description: Repository-relative npm project directory.
+        description: Repository-relative Node project directory.
         required: false
         type: string
         default: .
+      package-manager:
+        description: npm or pnpm; pnpm version comes from package.json.
+        type: string
+        default: npm
+      build-script:
+        type: string
+        default: build
+      lint-script:
+        description: Use check to include type checks where the caller provides it.
+        type: string
+        default: lint
       npm-scope:
         description: Private GitHub Packages npm scope.
         required: false
@@ -39,12 +50,12 @@ on:
         type: boolean
         default: false
       run-build:
-        description: Runs npm run build.
+        description: Runs the selected build script.
         required: false
         type: boolean
         default: true
       run-lint:
-        description: Runs npm run lint.
+        description: Runs the selected lint/check script.
         required: false
         type: boolean
         default: true
@@ -68,6 +79,11 @@ permissions: {}
 
 jobs:
   test:
+    env:
+      PACKAGE_MANAGER: ${{ inputs.package-manager }}
+      BUILD_SCRIPT: ${{ inputs.build-script }}
+      LINT_SCRIPT: ${{ inputs.lint-script }}
+      pnpm_config_verify_deps_before_run: "false"
     name: ${{ inputs.working-directory }} @ Node ${{ inputs.node-version }}
     runs-on: ${{ fromJSON(inputs.runs-on-json || format('[{0}]', toJSON(inputs.runs-on || 'ubuntu-latest'))) }}
     timeout-minutes: ${{ inputs.timeout-minutes }}
@@ -94,20 +110,27 @@ jobs:
               ;;
           esac
           test -f "$WORKING_DIRECTORY/package.json"
+          case "$PACKAGE_MANAGER" in npm|pnpm) ;; *) echo 'Use npm or pnpm.' >&2; exit 2 ;; esac
 
       - name: Setup Node.js
-        if: ${{ !inputs.private-packages }}
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
 
-      - name: Setup Node.js for GitHub Packages
-        if: ${{ inputs.private-packages }}
+      - uses: pnpm/action-setup@v4
+        if: ${{ inputs.package-manager == 'pnpm' }}
+        with:
+          package_json_file: ${{ inputs.working-directory }}/package.json
+
+      - name: Setup dependency cache and registry
         uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
-          registry-url: https://npm.pkg.github.com
-          scope: ${{ inputs.npm-scope }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json' }}
+          registry-url: ${{ inputs.private-packages && 'https://npm.pkg.github.com' || 'https://registry.npmjs.org' }}
+          scope: ${{ inputs.private-packages && inputs.npm-scope || '' }}
 
       - name: Record runner contract
         env:
@@ -129,34 +152,29 @@ jobs:
           df -h .
           command -v docker || true
 
-      - name: Install public dependencies
-        if: ${{ !inputs.private-packages }}
-        working-directory: ${{ inputs.working-directory }}
-        run: npm ci
-
-      - name: Install private dependencies
-        if: ${{ inputs.private-packages }}
+      - name: Install locked dependencies
         working-directory: ${{ inputs.working-directory }}
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
-        run: npm ci
+          NODE_AUTH_TOKEN: ${{ inputs.private-packages && github.token || '' }}
+        run: |
+          if [ "$PACKAGE_MANAGER" = pnpm ]; then pnpm install --frozen-lockfile; else npm ci; fi
 
       - name: Build
         if: ${{ inputs.run-build }}
         working-directory: ${{ inputs.working-directory }}
-        run: npm run build
+        run: '"$PACKAGE_MANAGER" run "$BUILD_SCRIPT"'
 
       - name: Lint
         if: ${{ inputs.run-lint }}
         working-directory: ${{ inputs.working-directory }}
-        run: npm run lint
+        run: '"$PACKAGE_MANAGER" run "$LINT_SCRIPT"'
 
       - name: Check Prettier
         if: ${{ inputs.run-prettier }}
         working-directory: ${{ inputs.working-directory }}
-        run: npm run prettier
+        run: '"$PACKAGE_MANAGER" run prettier'
 
       - name: Test
         if: ${{ inputs.run-test }}
         working-directory: ${{ inputs.working-directory }}
-        run: npm test
+        run: '"$PACKAGE_MANAGER" run test'

@@ -1,0 +1,245 @@
+name: Build and deploy Cloudflare Pages
+
+on:
+  workflow_call:
+    inputs:
+      environment-name:
+        required: true
+        type: string
+      branch:
+        description: Pages deployment branch; defaults to the triggering branch.
+        type: string
+        default: ""
+      production-branch:
+        description: Production branch, used to exclude prerelease tags from version fallback.
+        type: string
+        default: main
+      source-ref:
+        description: Optional released tag; otherwise build the triggering commit.
+        type: string
+        default: ""
+      version:
+        description: Generated semantic version; otherwise use the nearest reachable release tag.
+        type: string
+        default: ""
+      node-version:
+        type: string
+        default: 24.x
+      package-manager:
+        type: string
+        default: pnpm
+      working-directory:
+        type: string
+        default: .
+      private-packages:
+        type: boolean
+        default: false
+      npm-scope:
+        type: string
+        default: "@medrunner-services"
+      build-script:
+        type: string
+        default: build
+      public-env-map:
+        description: JSON object mapping public build variables to GitHub variable names.
+        type: string
+        default: "{}"
+      required-public-env:
+        description: JSON array of mapped build variables that must be nonempty.
+        type: string
+        default: "[]"
+      wrangler-version:
+        type: string
+        default: 4.148.0
+    outputs:
+      deployment-url:
+        value: ${{ jobs.deploy.outputs.deployment-url }}
+      alias-url:
+        value: ${{ jobs.deploy.outputs.alias-url }}
+      version:
+        value: ${{ jobs.deploy.outputs.version }}
+
+permissions: {}
+
+jobs:
+  deploy:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: ${{ inputs.environment-name }}
+      url: ${{ steps.deploy.outputs.pages-deployment-alias-url || steps.deploy.outputs.deployment-url }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      # Version stamping must not trigger another pnpm install after the frozen install.
+      pnpm_config_verify_deps_before_run: "false"
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ inputs.working-directory }}
+    outputs:
+      deployment-url: ${{ steps.deploy.outputs.deployment-url }}
+      alias-url: ${{ steps.deploy.outputs.pages-deployment-alias-url }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.source-ref || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        if: ${{ inputs.package-manager == 'pnpm' }}
+        with:
+          package_json_file: ${{ inputs.working-directory }}/package.json
+
+      # pnpm must be available before setup-node can resolve its dependency cache.
+      - name: Set up dependency cache and registry
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json' }}
+          registry-url: ${{ inputs.private-packages && 'https://npm.pkg.github.com' || 'https://registry.npmjs.org' }}
+          scope: ${{ inputs.private-packages && inputs.npm-scope || '' }}
+
+      - name: Set public build environment
+        env:
+          PUBLIC_VARIABLES: ${{ toJSON(vars) }}
+          PUBLIC_ENV_MAP: ${{ inputs.public-env-map }}
+          REQUIRED_PUBLIC_ENV: ${{ inputs.required-public-env }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync } from 'node:fs';
+
+          const variables = JSON.parse(process.env.PUBLIC_VARIABLES);
+          const mapping = JSON.parse(process.env.PUBLIC_ENV_MAP);
+          const variableName = /^[A-Z_][A-Z0-9_]*$/;
+          const reservedNames = ['NODE_OPTIONS', 'NODE_AUTH_TOKEN', 'PATH', 'HOME'];
+
+          assert.ok(
+            mapping && !Array.isArray(mapping) && typeof mapping === 'object',
+            'public-env-map must be an object',
+          );
+
+          // Export only the caller's mapped public values, without overriding runner settings.
+          const selected = {};
+          for (const [key, name] of Object.entries(mapping)) {
+            assert.ok(
+              variableName.test(key) && !/^(GITHUB_|RUNNER_|ACTIONS_)/.test(key) && !reservedNames.includes(key),
+              'Invalid build variable',
+            );
+            assert.ok(typeof name === 'string' && variableName.test(name), 'Invalid GitHub variable name');
+
+            const value = variables[name] || '';
+            assert.ok(typeof value === 'string' && !/[\r\n\0]/.test(value), 'Build values must be single-line strings');
+            selected[key] = value;
+          }
+
+          // Validate everything before writing any values to the runner environment.
+          const required = JSON.parse(process.env.REQUIRED_PUBLIC_ENV);
+          assert.ok(Array.isArray(required), 'required-public-env must be an array');
+          for (const key of required) {
+            assert.ok(selected[key]?.trim(), key + ' is required in this environment');
+          }
+
+          const environment = Object.entries(selected)
+            .map(([key, value]) => key + '=' + value + '\n')
+            .join('');
+          appendFileSync(process.env.GITHUB_ENV, environment);
+          NODE
+
+      - name: Install locked dependencies
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          NODE_AUTH_TOKEN: ${{ inputs.private-packages && github.token || '' }}
+        run: |
+          case "$PACKAGE_MANAGER" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            npm) npm ci ;;
+            *)
+              echo "Use npm or pnpm." >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Set build version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          DEPLOY_BRANCH: ${{ inputs.branch || github.ref_name }}
+          PRODUCTION_BRANCH: ${{ inputs.production-branch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          let version = process.env.RELEASE_VERSION;
+
+          // Merges without a new release still deploy, using their reachable release history.
+          if (!version) {
+            const args = ['describe', '--tags', '--abbrev=0', '--match', 'v[0-9]*'];
+            if (process.env.DEPLOY_BRANCH === process.env.PRODUCTION_BRANCH) {
+              args.push('--exclude', 'v*-*');
+            }
+
+            try {
+              const tag = execFileSync('git', args, {
+                encoding: 'utf8',
+                stdio: ['ignore', 'pipe', 'pipe'],
+              });
+              version = tag.trim().slice(1);
+            } catch {
+              // A project with no release tags can still build its package.json version.
+              version = pkg.version;
+            }
+          }
+
+          assert.match(version, /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/, 'Invalid build version');
+
+          // Stamp only the local build manifest; keep the lockfile and source history unchanged.
+          writeFileSync('package.json', JSON.stringify({ ...pkg, version }, null, 2) + '\n');
+          appendFileSync(process.env.GITHUB_OUTPUT, 'version=' + version + '\n');
+          NODE
+
+      - name: Build
+        env:
+          PACKAGE_MANAGER: ${{ inputs.package-manager }}
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: '"$PACKAGE_MANAGER" run "$BUILD_SCRIPT"'
+
+      - name: Prepare Wrangler
+        id: source
+        run: |
+          # Install Wrangler outside the app so npm never reinstalls its private dependencies.
+          mkdir -p "$RUNNER_TEMP/pages-wrangler"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: ${{ inputs.wrangler-version }}
+          packageManager: npm
+          workingDirectory: ${{ runner.temp }}/pages-wrangler
+          command: >-
+            pages deploy
+            --cwd "${{ github.workspace }}/${{ inputs.working-directory }}"
+            --branch ${{ inputs.branch || github.ref_name }}
+            --commit-hash ${{ steps.source.outputs.sha }}
+            --commit-dirty=false

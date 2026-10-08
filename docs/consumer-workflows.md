@@ -213,6 +213,10 @@ jobs:
       channel: ${{ needs.release.outputs.new-channel }}
 ```
 
+## Pages delivery
+
+For standalone static portals, use the [Pages caller example](../examples/pages-portal.yml) and [Pages delivery guide](pages-delivery.md). The caller reuses Node validation and semantic release, selects its branch/environment, and invokes one shared build/deploy workflow. PRs validate; merges deploy automatically without infrastructure provisioning or dynamic previews.
+
 ## Version-derived images
 
 Every publish job passes the release outputs directly to the GHCR workflow.
