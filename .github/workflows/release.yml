@@ -37,7 +37,7 @@ jobs:
           persist-credentials: false
 
       - name: Release CI platform
-        uses: cycjimmy/semantic-release-action@v6.0.0
+        uses: cycjimmy/semantic-release-action@v7.1.0
         with:
           semantic_version: 25.0.9
           extra_plugins: semantic-release-major-tag@0.3.2
