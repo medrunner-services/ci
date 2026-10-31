@@ -69,6 +69,14 @@ on:
         required: false
         type: boolean
         default: true
+      test-if-present:
+        description: Allows repositories without a test script during adoption; added tests run automatically.
+        type: boolean
+        default: false
+      additional-check-script:
+        description: Optional project-specific validation script, such as contracts:check.
+        type: string
+        default: ""
       timeout-minutes:
         description: Job timeout.
         required: false
@@ -177,4 +185,18 @@ jobs:
       - name: Test
         if: ${{ inputs.run-test }}
         working-directory: ${{ inputs.working-directory }}
-        run: '"$PACKAGE_MANAGER" run test'
+        env:
+          TEST_IF_PRESENT: ${{ inputs.test-if-present }}
+        run: |
+          if [ "$TEST_IF_PRESENT" = true ]; then
+            "$PACKAGE_MANAGER" run --if-present test
+          else
+            "$PACKAGE_MANAGER" run test
+          fi
+
+      - name: Additional project checks
+        if: ${{ inputs.additional-check-script != '' }}
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          CHECK_SCRIPT: ${{ inputs.additional-check-script }}
+        run: '"$PACKAGE_MANAGER" run "$CHECK_SCRIPT"'

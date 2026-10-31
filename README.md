@@ -6,6 +6,7 @@ The workflows are published as the `v1` contract for API, bot, and standalone si
 See the [workflow catalog](docs/workflow-catalog.md) for permissions, environments, outputs, and side effects.
 See the [consumer templates](docs/consumer-workflows.md) for copy-ready API, MED, and MOD caller workflows.
 See [Node sites and Cloudflare Pages](docs/pages-delivery.md) for PR validation and simple versioned build/deploy delivery.
+See [package delivery](docs/package-delivery.md) for semantic-release followed by npm or GitHub Packages publication on `dev` and `stable`.
 
 ## Local validation
 
@@ -16,7 +17,8 @@ npm ci
 npm test
 ```
 
-Production delivery logic stays in workflow steps; the JavaScript files under `tests/` only exercise those steps locally. No helper script is distributed to consumer repositories.
+Production delivery logic lives in reusable workflows and platform-owned helpers under `.github/scripts/`.
+The package publisher checks out its helper at the exact reusable workflow SHA; consumers do not copy helper scripts.
 
 Run static workflow validation:
 

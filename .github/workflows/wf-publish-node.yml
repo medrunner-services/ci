@@ -1,0 +1,160 @@
+name: Publish Node package
+
+on:
+  workflow_call:
+    inputs:
+      environment-name:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      release-tag:
+        type: string
+        required: true
+      channel:
+        type: string
+        required: true
+      registry-url:
+        type: string
+        default: https://npm.pkg.github.com
+      package-manager:
+        type: string
+        default: npm
+      node-version:
+        type: string
+        default: 24.x
+      working-directory:
+        type: string
+        default: .
+      build-script:
+        type: string
+        default: build
+      private-packages:
+        type: boolean
+        default: false
+      npm-scope:
+        type: string
+        default: '@medrunner-services'
+    secrets:
+      NPM_TOKEN:
+        required: false
+    outputs:
+      package-name:
+        value: ${{ jobs.publish.outputs.package-name }}
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ inputs.environment-name }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      package-name: ${{ steps.manifest.outputs.package-name }}
+    env:
+      VERSION: ${{ inputs.version }}
+      RELEASE_TAG: ${{ inputs.release-tag }}
+      CHANNEL: ${{ inputs.channel }}
+      REGISTRY_URL: ${{ inputs.registry-url }}
+      PACKAGE_MANAGER: ${{ inputs.package-manager }}
+      WORKING_DIRECTORY: ${{ inputs.working-directory }}
+      BUILD_SCRIPT: ${{ inputs.build-script }}
+      pnpm_config_verify_deps_before_run: 'false'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout immutable release tag
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.release-tag }}
+          persist-credentials: false
+
+      - name: Checkout platform publication helper
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: .ci/medrunner-services-ci
+          persist-credentials: false
+          sparse-checkout: .github/scripts/node-publication.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+
+      - uses: pnpm/action-setup@v4
+        if: ${{ inputs.package-manager == 'pnpm' }}
+        with:
+          package_json_file: ${{ inputs.working-directory }}/package.json
+
+      - name: Set up dependency registry and cache
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{ inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' || 'package-lock.json' }}
+          registry-url: ${{ inputs.private-packages && 'https://npm.pkg.github.com' || 'https://registry.npmjs.org' }}
+          scope: ${{ inputs.private-packages && inputs.npm-scope || '' }}
+
+      - name: Prepare release manifest
+        id: manifest
+        run: node .ci/medrunner-services-ci/.github/scripts/node-publication.mjs
+
+      - name: Install locked dependencies
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ inputs.private-packages && github.token || '' }}
+        run: |
+          set -euo pipefail
+          case "$PACKAGE_MANAGER" in
+            npm) npm ci ;;
+            pnpm) pnpm install --frozen-lockfile ;;
+            *) echo 'Use npm or pnpm.' >&2; exit 1 ;;
+          esac
+
+      - name: Build release package
+        working-directory: ${{ inputs.working-directory }}
+        run: '"$PACKAGE_MANAGER" run "$BUILD_SCRIPT"'
+
+      - name: Set up publication registry
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+          registry-url: ${{ inputs.registry-url }}
+          scope: ${{ inputs.registry-url == 'https://npm.pkg.github.com' && inputs.npm-scope || '' }}
+
+      - name: Publish release package
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ inputs.registry-url == 'https://npm.pkg.github.com' && github.token || secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The registry's trusted publisher can be used when no npm token is supplied.
+          if [[ "$REGISTRY_URL" == https://registry.npmjs.org ]]; then
+            npm publish --registry "$REGISTRY_URL" --tag "$CHANNEL" --provenance
+          else
+            npm publish --registry "$REGISTRY_URL" --tag "$CHANNEL"
+          fi
+
+      - name: Record publication result
+        env:
+          PACKAGE_NAME: ${{ steps.manifest.outputs.package-name }}
+        run: |
+          {
+            echo '## Package publication'
+            echo
+            echo "- Package: $PACKAGE_NAME@$VERSION"
+            echo "- Source tag: $RELEASE_TAG"
+            echo "- Registry: $REGISTRY_URL"
+            echo "- Channel: $CHANNEL"
+          } >> "$GITHUB_STEP_SUMMARY"
