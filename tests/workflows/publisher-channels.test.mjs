@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { validateRelease, prepareManifest } from '../../.github/scripts/node-publication.mjs';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -43,4 +43,37 @@ test('container validation accepts arbitrary channels while enforcing OCI syntax
       assert.throws(() => run('1.3.0', 'customer-a', 'bad/tag'));
     }
   }
+});
+
+test('build-only container verification keeps optional publication metadata empty', t => {
+  const root = mkdtempSync(join(tmpdir(), 'verify-container-metadata-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const workflow = parse(readFileSync(new URL('../../.github/workflows/wf-verify-container.yml', import.meta.url), 'utf8'));
+  const step = workflow.jobs.verify.steps.find(s => s.name === 'Validate release and build inputs');
+  const defaults = Object.fromEntries(Object.entries(workflow.on.workflow_call.inputs).map(([key, value]) => [key, value.default ?? '']));
+  const output = join(root, 'output');
+  const bash = process.platform === 'win32' ? 'C:/Program Files/Git/bin/bash.exe' : 'bash';
+  const run = overrides => {
+    const inputs = { ...defaults, ...overrides };
+    // Resolve the actual input/default expressions from the workflow so an env-level
+    // default cannot silently turn build-only verification into publish validation.
+    const env = Object.fromEntries(Object.entries(step.env).map(([key, expression]) => {
+      const match = /^\$\{\{\s*inputs\.([\w-]+)(?:\s*\|\|\s*'([^']*)')?\s*\}\}$/.exec(expression);
+      assert.ok(match, `Unsupported input expression: ${expression}`);
+      return [key, match[2] === undefined ? inputs[match[1]] : inputs[match[1]] || match[2]];
+    }));
+    writeFileSync(output, '');
+    execFileSync(bash, ['-c', step.run], { cwd: root, stdio: 'pipe', env: {
+      ...process.env, ...env, GITHUB_OUTPUT: output.replaceAll('\\', '/'),
+    }});
+    return readFileSync(output, 'utf8');
+  };
+  assert.equal(run({}), '');
+  const metadata = { image: 'ghcr.io/medrunner-services/bot-mod', version: '1.2.3', 'release-tag': 'v1.2.3' };
+  assert.match(run(metadata), /version-build-arg=VERSION=1\.2\.3/);
+  assert.match(run({ ...metadata, channel: 'preview' }), /version-build-arg=VERSION=1\.2\.3/);
+  assert.throws(() => run({ channel: 'preview' }));
+  assert.throws(() => run({ image: metadata.image }));
+  assert.throws(() => run({ ...metadata, 'release-tag': '' }));
+  assert.throws(() => run({ ...metadata, channel: 'bad/tag' }));
 });

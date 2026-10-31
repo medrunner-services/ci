@@ -61,7 +61,7 @@ jobs:
           DOCKERFILE_PATH: ${{ inputs.dockerfile }}
           VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ inputs.release-tag }}
-          CHANNEL: ${{ inputs.channel || 'latest' }}
+          CHANNEL: ${{ inputs.channel }}
           VERSION_BUILD_ARG_NAME: ${{ inputs.version-build-arg-name }}
         shell: bash
         run: |
@@ -91,10 +91,12 @@ jobs:
             exit 0
           fi
 
-          [[ "$supplied_metadata_inputs" -eq "${#metadata_inputs[@]}" ]] || {
-            echo 'image, version, release-tag, and channel must be supplied together for publish preflight verification.' >&2
+          [[ -n "$IMAGE" && -n "$VERSION" && -n "$RELEASE_TAG" ]] || {
+            echo 'image, version, and release-tag must be supplied together for publish preflight verification.' >&2
             exit 1
           }
+
+          CHANNEL="${CHANNEL:-latest}"
 
           [[ "$IMAGE" =~ ^ghcr\.io/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)+$ ]] || {
             echo "image must be a lowercase ghcr.io image reference: $IMAGE" >&2
