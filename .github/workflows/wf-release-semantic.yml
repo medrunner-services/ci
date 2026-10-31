@@ -24,6 +24,10 @@ on:
       extra-plugins:
         type: string
         default: ""
+      standard-branches:
+        description: Resolve preview, rc, ci, stable, and prefixed maintenance ranges centrally.
+        type: boolean
+        default: false
       enable-backpropagation:
         type: boolean
         default: true
@@ -116,7 +120,14 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             .github/actions/release-backpropagation
+            .github/scripts/release-branches.mjs
           sparse-checkout-cone-mode: false
+
+      - name: Resolve standard release branches
+        id: branches
+        if: ${{ inputs.standard-branches }}
+        shell: bash
+        run: node .ci/medrunner-services-ci/.github/scripts/release-branches.mjs
 
       - name: Run semantic-release
         id: semantic
@@ -124,6 +135,7 @@ jobs:
         with:
           semantic_version: ${{ inputs.semantic-release-version }}
           extra_plugins: ${{ inputs.extra-plugins }}
+          branches: ${{ steps.branches.outputs.branches }}
           ci: true
           dry_run: false
         env:

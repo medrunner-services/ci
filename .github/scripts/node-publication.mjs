@@ -4,9 +4,17 @@ import { pathToFileURL } from 'node:url';
 
 export function validateRelease({ version, tag, channel, registry, manager, directory }) {
   const core = '(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)';
-  const pattern = channel === 'dev' ? `^${core}-dev\\.(0|[1-9][0-9]*)$` : `^${core}$`;
-  if (!['dev', 'stable'].includes(channel) || !new RegExp(pattern).test(version))
-    throw new Error('Use a stable SemVer or a dev prerelease matching its channel.');
+  const suffixes = { preview: 'dev', rc: 'rc', ci: 'ci-do-not-use' };
+  const suffix = suffixes[channel];
+  const maintenance = /^maintenance-(0|[1-9][0-9]*)(?:\.(0|[1-9][0-9]*))?\.x$/.exec(channel);
+  const pattern = suffix ? `^${core}-${suffix}\\.(0|[1-9][0-9]*)$` : `^${core}$`;
+  if ((!suffix && channel !== 'stable' && !maintenance) || !new RegExp(pattern).test(version))
+    throw new Error('Version must match the preview, rc, ci, stable, or maintenance channel.');
+  if (maintenance) {
+    const [major, minor] = version.split('.');
+    if (major !== maintenance[1] || (maintenance[2] !== undefined && minor !== maintenance[2]))
+      throw new Error('Version is outside the maintenance channel range.');
+  }
   if (tag !== `v${version}`) throw new Error('Release tag must equal v<version>.');
   if (!['https://registry.npmjs.org', 'https://npm.pkg.github.com'].includes(registry))
     throw new Error('Unsupported package registry.');

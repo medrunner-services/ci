@@ -11,7 +11,7 @@ flowchart LR
   Publish --> Stable[release/stable: stable / x.y.z]
 ```
 
-The caller owns a semantic-release configuration with `release/stable` on channel `stable` and `main` on channel `dev`, prerelease `dev`.
+The caller owns a semantic-release configuration with `release/stable` on channel `stable` and `main` on channel `preview`, prerelease `preview`.
 Use only the commit analyzer, release notes generator, and GitHub plugins: registry publication is a separate job after release.
 
 Pass `new-version`, `new-tag`, and `new-channel` from the release job to `wf-publish-node.yml`.
@@ -20,7 +20,7 @@ Run publication only when `release-published == 'true'`; GITHUB_TOKEN-created re
 The publisher checks out the release tag, installs frozen dependencies with npm or pnpm, stamps `package.json`, and builds before publishing.
 The platform helper is checked out from the exact reusable workflow SHA, so caller repositories do not carry duplicated release logic.
 
-Both registries use explicit `dev` and `stable` distribution tags.
+Both registries use explicit `preview` and `stable` distribution tags.
 Source `publishConfig.tag` and scoped registry overrides are replaced for the publication artifact, so a dev release cannot update `latest`.
 
 Use `registry-url: https://npm.pkg.github.com` with environment `publish-gh-npm` for GitHub Packages.
@@ -40,3 +40,17 @@ Then merge each main adoption PR, its development consolidation PR, and the stab
 
 Keep stable-history backpropagation disabled during adoption, matching the portal callers.
 Development consolidation is reviewed through explicit PRs; no workflow approves or merges those PRs automatically.
+
+## Extended release policy
+
+Set `standard-branches: true` on the shared semantic-release job.
+The platform resolves real remote `release/N.x` and `release/N.N.x` branches into explicit maintenance ranges, using `maintenance-N.x` / `maintenance-N.N.x` channels that cannot move the current stable aliases.
+
+The consumer config retains the maintenance glob `release/+([0-9])?(.{+([0-9]),x}).x` as its declaration.
+The shared resolver supplies concrete ranges because prefixed branch names are not SemVer ranges by themselves.
+
+`main` uses channel `preview` and prerelease `dev`; `release/rc` uses `rc` / `rc`; `ci` uses `ci` / `ci-do-not-use`.
+Stable uses `release/stable` and channel `stable`.
+
+Consumers use the floating `@v1` tag and must wait for this platform change to publish before merging their adoption PRs.
+Promoting main to stable carries the unified workflow; a dedicated stable-sync PR is unnecessary.

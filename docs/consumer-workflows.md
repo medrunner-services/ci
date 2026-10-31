@@ -4,7 +4,7 @@ Copy one template into each service repository as `.github/workflows/ci.yml`.
 
 Each release caller owns its semantic-release configuration in `release.config.*`, `.releaserc*`, or the `semanticRelease` field in `package.json`.
 
-The reusable workflow does not set branches, channels, tag format, repository URL, or plugins.
+By default, the reusable workflow does not override caller release configuration. Set `standard-branches: true` to resolve the extended preview/rc/ci/stable/maintenance policy centrally; tag format and plugins remain caller-owned.
 
 Pass `extra-plugins` only when the caller configuration uses a package that is not already bundled by the semantic-release action.
 
