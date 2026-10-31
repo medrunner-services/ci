@@ -70,13 +70,13 @@ jobs:
         shell: bash
     steps:
       - name: Checkout immutable release tag
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.release-tag }}
           persist-credentials: false
 
       - name: Checkout platform publication helper
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
@@ -86,7 +86,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
           package-manager-cache: false
@@ -97,7 +97,7 @@ jobs:
           package_json_file: ${{ inputs.working-directory }}/package.json
 
       - name: Set up dependency registry and cache
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
           cache: ${{ inputs.package-manager }}
@@ -126,7 +126,7 @@ jobs:
         run: '"$PACKAGE_MANAGER" run "$BUILD_SCRIPT"'
 
       - name: Set up publication registry
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node-version }}
           package-manager-cache: false
