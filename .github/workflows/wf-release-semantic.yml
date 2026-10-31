@@ -39,7 +39,14 @@ on:
       backpropagation-approve:
         type: boolean
         default: true
+      backpropagation-approve-with-github-token:
+        description: Use GitHub Actions to review a PR authored with PR_CREATION_PAT.
+        type: boolean
+        default: false
     secrets:
+      PR_CREATION_PAT:
+        description: Optional independent PR author token so PR checks and the merged main push run unattended.
+        required: false
       PR_AUTOMATION_PAT:
         required: false
     outputs:
@@ -161,6 +168,24 @@ jobs:
             echo 'reason=release history must be back-propagated' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Validate backpropagation credentials
+        if: ${{ steps.backprop-preflight.outputs.needed == 'true' }}
+        env:
+          APPROVE: ${{ inputs.backpropagation-approve }}
+          APPROVE_WITH_GITHUB_TOKEN: ${{ inputs.backpropagation-approve-with-github-token }}
+          PR_CREATION_PAT: ${{ secrets.PR_CREATION_PAT }}
+          PR_AUTOMATION_PAT: ${{ secrets.PR_AUTOMATION_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$APPROVE" == true ]]; then
+            if [[ "$APPROVE_WITH_GITHUB_TOKEN" == true ]]; then
+              test -n "$PR_CREATION_PAT" || { echo 'PR_CREATION_PAT is required for independent GitHub Actions approval.' >&2; exit 1; }
+            else
+              test -n "$PR_AUTOMATION_PAT" || { echo 'PR_AUTOMATION_PAT is required for external review approval.' >&2; exit 1; }
+            fi
+          fi
+
       - name: Set up .NET for backpropagation
         if: ${{ steps.backprop-preflight.outputs.needed == 'true' }}
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -178,8 +203,8 @@ jobs:
           auto-merge: ${{ inputs.backpropagation-auto-merge }}
           approve: ${{ inputs.backpropagation-approve }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          PR_AUTOMATION_PAT: ${{ secrets.PR_AUTOMATION_PAT }}
+          GH_TOKEN: ${{ secrets.PR_CREATION_PAT || github.token }}
+          PR_AUTOMATION_PAT: ${{ inputs.backpropagation-approve-with-github-token && github.token || secrets.PR_AUTOMATION_PAT }}
 
       - name: Record release result
         env:
