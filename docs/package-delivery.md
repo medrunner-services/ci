@@ -34,3 +34,30 @@ Approval and auto-merge remain separately configurable.
 
 Consumers reference the shared workflows through floating @v1.
 Merge and release platform changes before callers rely on new inputs such as additional-tags; promoting main to stable carries the unified workflow without a separate stable-sync PR.
+
+## Unattended stable backpropagation
+
+```mermaid
+flowchart LR
+  Release[Stable release] --> Author[PAT identity creates stable-to-main PR]
+  Author --> Checks[Automatic PR checks]
+  Author --> Review[github-actions bot approves]
+  Checks --> Merge[Merge commit after repository requirements]
+  Review --> Merge
+  Merge --> Main[Main push workflows]
+```
+
+For a single stored PAT, supply PR_CREATION_PAT in each caller's release environment and set backpropagation-approve-with-github-token: true.
+The PAT creates the PR and requests auto-merge; the job GITHUB_TOKEN is the independent reviewer, so repository Actions settings must allow creating and approving PRs.
+
+The PAT identity needs repository access with Contents read/write and Pull requests read/write, and permission to merge into main under its existing rules.
+The PR author and reviewer must be different identities; the alternative existing PR_AUTOMATION_PAT mode remains available for a separate external reviewer.
+
+The creator PAT lets PR checks run automatically and the final merged-main push trigger its normal workflows.
+GITHUB_TOKEN-created PRs can require human approval of workflow runs, and GITHUB_TOKEN pushes do not trigger normal push workflows.
+
+Enable repository auto-merge and allow merge commits, since squash/rebase do not preserve the tagged stable commit's ancestry.
+Required linear history conflicts with this operation; do not bypass or silently remove it. Required reviews/checks, push restrictions, CODEOWNERS, and environment gates still apply.
+
+The current action applies the ci and automated labels; provision them in the repositories.
+Protect the release environment and restrict the PAT to the intended repositories; the workflow never prints credential values.
