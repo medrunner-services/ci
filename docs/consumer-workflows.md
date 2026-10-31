@@ -4,11 +4,11 @@ Copy one template into each service repository as `.github/workflows/ci.yml`.
 
 Each release caller owns its semantic-release configuration in `release.config.*`, `.releaserc*`, or the `semanticRelease` field in `package.json`.
 
-By default, the reusable workflow does not override caller release configuration. Set `standard-branches: true` to resolve the extended preview/rc/ci/stable/maintenance policy centrally; tag format and plugins remain caller-owned.
+The reusable workflow does not override caller release configuration. Branches, maintenance ranges, channels, tag format, and plugins remain caller-owned.
 
 Pass `extra-plugins` only when the caller configuration uses a package that is not already bundled by the semantic-release action.
 
-For stable-history backpropagation, the caller configuration must publish its stable branch with channel `stable`.
+For release-history backpropagation, set release-ref-name to the source branch; its channel name is caller-owned.
 
 The called release and publish jobs set their protected environment through `environment-name`.
 

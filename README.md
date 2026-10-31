@@ -6,7 +6,7 @@ The workflows are published as the `v1` contract for API, bot, and standalone si
 See the [workflow catalog](docs/workflow-catalog.md) for permissions, environments, outputs, and side effects.
 See the [consumer templates](docs/consumer-workflows.md) for copy-ready API, MED, and MOD caller workflows.
 See [Node sites and Cloudflare Pages](docs/pages-delivery.md) for PR validation and simple versioned build/deploy delivery.
-See [package delivery](docs/package-delivery.md) for semantic-release followed by npm or GitHub Packages publication on preview, rc, ci, stable, and maintenance channels.
+See [package delivery](docs/package-delivery.md) for semantic-release followed by npm or GitHub Packages publication on caller-defined channels.
 
 ## Local validation
 

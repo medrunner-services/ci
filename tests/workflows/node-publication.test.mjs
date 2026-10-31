@@ -19,14 +19,13 @@ test('stable and dev releases are accepted for both registries and managers', ()
   }
 });
 
-test('rejects mismatched tags, unsafe paths, and cross-channel promotions', () => {
+test('rejects malformed versions, mismatched tags, unsafe paths and invalid tag syntax', () => {
   for (const change of [
-    { tag: 'v9.9.9' }, { version: '1.2.3-beta.1', tag: 'v1.2.3-beta.1' },
-    { channel: 'preview' }, { channel: 'latest' }, { directory: '../project' },
-    { directory: '/tmp/project' }, { directory: 'C:\\project' }, { registry: 'https://example.invalid' },
+    { tag: 'v9.9.9' }, { version: '1.2.3-01', tag: 'v1.2.3-01' },
+    { channel: 'my/channel' }, { channel: 'bad tag' }, { directory: '../project' },
+    { directory: '/tmp/project' }, { directory: 'C:\\project' }, { registry: 'file:///tmp/registry' },
     { manager: 'yarn' }, { version: '01.2.3', tag: 'v01.2.3' },
   ]) assert.throws(() => validateRelease({ ...stable, ...change }));
-  assert.throws(() => validateRelease({ ...dev, channel: 'stable' }));
 });
 
 test('release version and channel override source manifest publication defaults', () => {
