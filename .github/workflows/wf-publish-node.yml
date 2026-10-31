@@ -59,7 +59,7 @@ jobs:
     env:
       VERSION: ${{ inputs.version }}
       RELEASE_TAG: ${{ inputs.release-tag }}
-      CHANNEL: ${{ inputs.channel }}
+      CHANNEL: ${{ inputs.channel || 'latest' }}
       REGISTRY_URL: ${{ inputs.registry-url }}
       PACKAGE_MANAGER: ${{ inputs.package-manager }}
       WORKING_DIRECTORY: ${{ inputs.working-directory }}

@@ -9,7 +9,7 @@ import { parse } from 'yaml';
 import { prepareManifest, validateRelease } from '../../.github/scripts/node-publication.mjs';
 
 const stable = { version: '1.2.3', tag: 'v1.2.3', channel: 'stable', registry: 'https://registry.npmjs.org', manager: 'npm', directory: '.' };
-const dev = { ...stable, version: '1.3.0-dev.2', tag: 'v1.3.0-dev.2', channel: 'dev' };
+const dev = { ...stable, version: '1.3.0-dev.2', tag: 'v1.3.0-dev.2', channel: 'preview' };
 
 test('stable and dev releases are accepted for both registries and managers', () => {
   for (const release of [stable, dev]) {
@@ -19,21 +19,20 @@ test('stable and dev releases are accepted for both registries and managers', ()
   }
 });
 
-test('rejects mismatched tags, unsafe paths, and cross-channel promotions', () => {
+test('rejects malformed versions, mismatched tags, unsafe paths and invalid tag syntax', () => {
   for (const change of [
-    { tag: 'v9.9.9' }, { version: '1.2.3-beta.1', tag: 'v1.2.3-beta.1' },
-    { channel: 'dev' }, { channel: 'latest' }, { directory: '../project' },
-    { directory: '/tmp/project' }, { directory: 'C:\\project' }, { registry: 'https://example.invalid' },
+    { tag: 'v9.9.9' }, { version: '1.2.3-01', tag: 'v1.2.3-01' },
+    { channel: 'my/channel' }, { channel: 'bad tag' }, { directory: '../project' },
+    { directory: '/tmp/project' }, { directory: 'C:\\project' }, { registry: 'file:///tmp/registry' },
     { manager: 'yarn' }, { version: '01.2.3', tag: 'v01.2.3' },
   ]) assert.throws(() => validateRelease({ ...stable, ...change }));
-  assert.throws(() => validateRelease({ ...dev, channel: 'stable' }));
 });
 
 test('release version and channel override source manifest publication defaults', () => {
   const source = { name: '@medrunner/api-client', version: '0.7.0', publishConfig: { access: 'public', tag: 'latest', '@medrunner:registry': 'https://example.invalid' } };
   const result = prepareManifest(source, dev);
   assert.equal(result.version, dev.version);
-  assert.deepEqual(result.publishConfig, { access: 'public', tag: 'dev', registry: dev.registry });
+  assert.deepEqual(result.publishConfig, { access: 'public', tag: 'preview', registry: dev.registry });
   assert.equal(source.publishConfig.tag, 'latest');
 });
 
@@ -57,7 +56,7 @@ test('publication helper stamps the artifact without changing dependency locks',
       REGISTRY_URL: dev.registry, PACKAGE_MANAGER: dev.manager, WORKING_DIRECTORY: '.', GITHUB_OUTPUT: join(root, 'output') },
   });
   assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).version, dev.version);
-  assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).publishConfig.tag, 'dev');
+  assert.equal(JSON.parse(readFileSync(join(root, 'package.json'))).publishConfig.tag, 'preview');
   assert.equal(readFileSync(join(root, 'package-lock.json'), 'utf8'), '{"lockfileVersion":3}');
   assert.match(readFileSync(join(root, 'output'), 'utf8'), /package-name=@medrunner\/api-client/);
 });

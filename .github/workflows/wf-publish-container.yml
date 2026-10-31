@@ -33,6 +33,10 @@ on:
       channel:
         type: string
         required: true
+      additional-tags:
+        description: Optional comma-separated OCI tag aliases, chosen by the caller.
+        type: string
+        default: ""
       version-build-arg-name:
         type: string
         default: VERSION
@@ -71,7 +75,8 @@ jobs:
           DOCKERFILE_PATH: ${{ inputs.dockerfile }}
           VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ inputs.release-tag }}
-          CHANNEL: ${{ inputs.channel }}
+          CHANNEL: ${{ inputs.channel || 'latest' }}
+          ADDITIONAL_TAGS: ${{ inputs.additional-tags }}
           VERSION_BUILD_ARG_NAME: ${{ inputs.version-build-arg-name }}
         shell: bash
         run: |
@@ -104,19 +109,25 @@ jobs:
             exit 1
           }
 
-          if [[ "$CHANNEL" == stable ]]; then
-            [[ "$VERSION" != *-* ]] || { echo 'stable releases must not be prereleases.' >&2; exit 1; }
-          else
-            [[ "$CHANNEL" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || {
-              echo "channel must be a valid OCI tag: $CHANNEL" >&2
+          [[ "$CHANNEL" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || {
+            echo 'channel must be a valid OCI tag.' >&2
+            exit 1
+          }
+
+          IFS=',' read -ra aliases <<< "$ADDITIONAL_TAGS"
+          for alias in "${aliases[@]}"; do
+            [[ -z "$alias" || "$alias" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || {
+              echo 'additional-tags must contain valid comma-separated OCI tags.' >&2
               exit 1
             }
-            [[ "$CHANNEL" != latest ]] || {
-              echo 'latest is reserved for stable releases.' >&2
-              exit 1
-            }
-            [[ "$VERSION" == *-* ]] || { echo 'non-stable channels require a prerelease version.' >&2; exit 1; }
-          fi
+          done
+          {
+            echo 'alias-tags<<OCI_ALIAS_TAGS'
+            for alias in "${aliases[@]}"; do
+              [[ -z "$alias" ]] || echo "type=raw,value=$alias"
+            done
+            echo 'OCI_ALIAS_TAGS'
+          } >> "$GITHUB_OUTPUT"
 
           echo "version-build-arg=$VERSION_BUILD_ARG_NAME=$VERSION" >> "$GITHUB_OUTPUT"
 
@@ -166,9 +177,8 @@ jobs:
           tags: |
             type=raw,value=v${{ inputs.version }}
             type=raw,value=${{ inputs.version }}
-            type=raw,value=${{ inputs.channel }}
-            type=raw,value=${{ inputs.channel }}-latest
-            type=raw,value=latest,enable=${{ inputs.channel == 'stable' }}
+            type=raw,value=${{ inputs.channel || 'latest' }}
+            ${{ steps.validate.outputs.alias-tags }}
 
       - name: Build and publish Docker image
         id: build
@@ -188,15 +198,11 @@ jobs:
           IMAGE: ${{ inputs.image }}
           VERSION: ${{ inputs.version }}
           RELEASE_TAG: ${{ inputs.release-tag }}
-          CHANNEL: ${{ inputs.channel }}
+          CHANNEL: ${{ inputs.channel || 'latest' }}
+          ADDITIONAL_TAGS: ${{ inputs.additional-tags }}
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         shell: bash
         run: |
-          aliases=("$CHANNEL" "${CHANNEL}-latest")
-          if [[ "$CHANNEL" == stable ]]; then
-            aliases+=(latest)
-          fi
-
           {
             echo '## GHCR publication'
             echo
@@ -204,5 +210,5 @@ jobs:
             echo "- Version: \`$VERSION\`"
             echo "- Channel: \`$CHANNEL\`"
             echo "- Immutable reference: \`$IMAGE@$IMAGE_DIGEST\`"
-            echo "- Mutable aliases: \`${aliases[*]}\`"
+            echo "- Mutable aliases: \`$CHANNEL${ADDITIONAL_TAGS:+,$ADDITIONAL_TAGS}\`"
           } >> "$GITHUB_STEP_SUMMARY"

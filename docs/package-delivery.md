@@ -2,41 +2,35 @@
 
 ```mermaid
 flowchart LR
-  PR[Pull request] --> Test[Locked install, build, lint, tests]
-  Push[Push: main or release/stable] --> Test
-  Test --> Release[wf-release-semantic]
-  Release --> New{New release?}
-  New -->|yes| Publish[wf-publish-node: checkout release tag]
-  Publish --> Dev[main: dev / x.y.z-dev.N]
-  Publish --> Stable[release/stable: stable / x.y.z]
+  Config[Caller release configuration] --> Release[Shared semantic-release runner]
+  Release --> Publish[Shared publisher: immutable release tag]
+  Channels[Caller channels and aliases] --> Publish
+  Publish --> Registry[Selected registry]
 ```
 
-The caller owns a semantic-release configuration with `release/stable` on channel `stable` and `main` on channel `dev`, prerelease `dev`.
-Use only the commit analyzer, release notes generator, and GitHub plugins: registry publication is a separate job after release.
+The caller owns branches, maintenance ranges, channels, prerelease suffixes, and release plugins.
+The shared release workflow runs that configuration without overriding its branch definitions or enforcing a release-channel policy.
 
-Pass `new-version`, `new-tag`, and `new-channel` from the release job to `wf-publish-node.yml`.
-Run publication only when `release-published == 'true'`; GITHUB_TOKEN-created releases do not need to trigger another workflow.
+Pass new-version, new-tag, and new-channel to the publishing job when release-published is true.
+The package publisher checks out that tag, performs a frozen npm/pnpm install, stamps the package version, builds, and publishes in the same workflow run.
 
-The publisher checks out the release tag, installs frozen dependencies with npm or pnpm, stamps `package.json`, and builds before publishing.
-The platform helper is checked out from the exact reusable workflow SHA, so caller repositories do not carry duplicated release logic.
+Any npm-compatible channel is supported, with any valid SemVer version; the publisher does not pair channel names with prerelease identifiers or impose maintenance ranges.
+An empty semantic-release channel uses the registry default latest tag; the registry/npm client validates additional registry-specific rules.
 
-Both registries use explicit `dev` and `stable` distribution tags.
-Source `publishConfig.tag` and scoped registry overrides are replaced for the publication artifact, so a dev release cannot update `latest`.
+The publisher checks version syntax, the v<version> source-tag contract, npm tag URI safety, project paths, manager support, publishable package metadata, and registry URL syntax.
+The caller-selected registry/channel replace source publishConfig defaults in the publication artifact.
 
-Use `registry-url: https://npm.pkg.github.com` with environment `publish-gh-npm` for GitHub Packages.
-The caller grants `contents: read`, `packages: write`, and `id-token: write`; package access uses its GITHUB_TOKEN.
+GitHub Packages uses the caller GITHUB_TOKEN and the publish-gh-npm environment.
+Public npm uses publish-npm, with an existing NPM_TOKEN or an already-configured trusted publisher; other HTTP(S) npm registries can use NPM_TOKEN and a caller-selected environment.
 
-Use `registry-url: https://registry.npmjs.org` with environment `publish-npm` for npm.
-An existing `NPM_TOKEN` can be passed as an explicit reusable-workflow secret or supplied by that environment; without a token, configure npm trusted publishing for the caller workflow and the environment.
+Container publication accepts any valid OCI channel tag and either a release or prerelease version.
+It publishes the version tags and selected channel, with no automatic latest or channel-latest aliases; callers request any additional aliases with the comma-separated additional-tags input.
 
-Granting `id-token: write` enables npm provenance and trusted publishing; it does not configure the registry trust relationship.
-Keep the existing npm token until that relationship has been configured and tested.
+Maintenance range enforcement belongs to semantic-release and the downstream configuration.
+For prefixed maintenance names such as release/1.2.x, that repository must provide the explicit range 1.2.x; this platform does not discover or rename maintenance branches.
 
-Create a real `release/stable` branch before enabling semantic-release on `main`.
-Prefer the last published stable tag as its baseline; repositories with no stable tags use semantic-release's normal first-release version, rather than inventing a published release history.
+Backpropagation is optional and keyed to the caller-configured release-ref-name, not a reserved channel name.
+Approval and auto-merge remain separately configurable.
 
-Merge the shared CI PR and let its platform release advance `v1` before merging consumer PRs.
-Then merge each main adoption PR, its development consolidation PR, and the stable adoption PR when stable publication is intended.
-
-Keep stable-history backpropagation disabled during adoption, matching the portal callers.
-Development consolidation is reviewed through explicit PRs; no workflow approves or merges those PRs automatically.
+Consumers reference the shared workflows through floating @v1.
+Merge and release platform changes before callers rely on new inputs such as additional-tags; promoting main to stable carries the unified workflow without a separate stable-sync PR.
