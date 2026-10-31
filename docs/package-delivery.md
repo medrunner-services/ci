@@ -7,7 +7,7 @@ flowchart LR
   Test --> Release[wf-release-semantic]
   Release --> New{New release?}
   New -->|yes| Publish[wf-publish-node: checkout release tag]
-  Publish --> Dev[main: dev / x.y.z-dev.N]
+  Publish --> Dev[main: preview / x.y.z-dev.N]
   Publish --> Stable[release/stable: stable / x.y.z]
 ```
 
@@ -36,7 +36,7 @@ Create a real `release/stable` branch before enabling semantic-release on `main`
 Prefer the last published stable tag as its baseline; repositories with no stable tags use semantic-release's normal first-release version, rather than inventing a published release history.
 
 Merge the shared CI PR and let its platform release advance `v1` before merging consumer PRs.
-Then merge each main adoption PR, its development consolidation PR, and the stable adoption PR when stable publication is intended.
+Then merge each main adoption PR and its development consolidation PR. Promote main to stable when stable publication is intended.
 
 Keep stable-history backpropagation disabled during adoption, matching the portal callers.
 Development consolidation is reviewed through explicit PRs; no workflow approves or merges those PRs automatically.
